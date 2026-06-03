@@ -239,8 +239,8 @@ def main():
                     info_text = f"Strana {aktualni_stranka + 1} / {len(kniha_stranky)}"
                     draw_red.text((528 - 200, 880 - 35), info_text, font=font_info, fill=0)
 
-                image_black_rotated = image_black.rotate(90, expand=True)
-                image_red_rotated = image_red.rotate(90, expand=True)
+                image_black_rotated = image_black.transpose(Image.ROTATE_90)
+                image_red_rotated = image_red.transpose(Image.ROTATE_90)
 
                 epd.init()
                 epd.display(
