@@ -1,7 +1,7 @@
 import os
 import io
 import json
-from flask import Flask, send_file, request
+from flask import Flask, send_file
 from PIL import Image, ImageDraw, ImageFont
 
 # Import tvých vlastních modulů
@@ -12,15 +12,14 @@ app = Flask(__name__)
 
 # --- GLOBÁLNÍ PROMĚNNÉ ---
 PROGRESS_FILE = "progress.json"
-aktualni_kniha = "epuby/Alliances.epub"
+aktualni_kniha = "epuby/Alliances.epub"  # Tvoje cesta ke knize
 aktualni_stranka = 0
 kniha_stranky = []
 
-# Cesta k fontu - uprav si podle svého OS, ideálně měj font uloženy přímo ve složce
 FONT_PATH = "DejaVuSans.ttf"
 
 
-# --- POMOCNÉ FUNKCE (převzato z tvého kódu) ---
+# --- POMOCNÉ FUNKCE ---
 def nacti_pozici(kniha_id):
     if os.path.exists(PROGRESS_FILE):
         try:
@@ -47,20 +46,24 @@ def uloz_pozici(kniha_id, stranka):
 
 # --- INICIALIZACE KNIHY ---
 print(f"Načítám knihu: {aktualni_kniha}...")
-cisty_text = zpracovani_epub.nacti_epub_text(aktualni_kniha)
 
 try:
     font_text = ImageFont.truetype(FONT_PATH, 32)
     font_info = ImageFont.truetype(FONT_PATH, 20)
 except IOError:
-    print(
-        f"POZOR: Font {FONT_PATH} nenalezen! Používám výchozí font (rozložení se může lišit)."
-    )
+    print(f"POZOR: Font {FONT_PATH} nenalezen! Používám výchozí.")
     font_text = ImageFont.load_default()
     font_info = ImageFont.load_default()
 
-radky = zpracovani_textu.zformatuj_pro_displej(cisty_text, font_text, 840)
-kniha_stranky = zpracovani_textu.rozdel_na_stranky(radky, font_text, 468)
+# NA VÝŠKU: Displej má 528 na šířku a 880 na výšku.
+# Předáváme modulům nové maximální rozměry pro formátování (s odečtením okrajů).
+# Obrázky zmenšíme max na šířku 488 (528 - okraje) a výšku 820.
+obsah_knihy = zpracovani_epub.nacti_epub_obsah(
+    aktualni_kniha, max_sirka=488, max_vyska=820
+)
+
+# Text zalamujeme na šířku 488 a výšku 820 (aby zbylo 60 pixelů dole na stavovou lištu).
+kniha_stranky = zpracovani_textu.zformatuj_a_rozdel(obsah_knihy, font_text, 488, 820)
 
 aktualni_stranka = nacti_pozici(aktualni_kniha)
 if aktualni_stranka >= len(kniha_stranky):
@@ -72,7 +75,6 @@ if aktualni_stranka >= len(kniha_stranky):
 
 @app.route("/")
 def index():
-    # Jednoduché HTML rozhraní s obrazovkou a tlačítky
     html = """
     <!DOCTYPE html>
     <html lang="cs">
@@ -97,22 +99,20 @@ def index():
         </style>
     </head>
     <body>
-        <h2>Simulátor: 7.5" HD Waveshare (880x528)</h2>
-        <img src="/screen" class="screen" width="880" height="528" id="display" alt="E-ink displej">
+        <h2>Simulátor: 7.5" HD Waveshare (Na výšku - 528x880)</h2>
+        <img src="/screen" class="screen" width="528" height="880" id="display" alt="E-ink displej">
         
         <div class="controls">
-            <button onclick="stisk_tlacitka('predchozi')">⬅ Předchozí (Pin 26)</button>
-            <button onclick="stisk_tlacitka('akce')">Menu / Akce (Pin 19)</button>
-            <button onclick="stisk_tlacitka('dalsi')">Další ➡ (Pin 21)</button>
+            <button onclick="stisk_tlacitka('predchozi')">⬅ Předchozí</button>
+            <button onclick="stisk_tlacitka('akce')">Menu / Akce</button>
+            <button onclick="stisk_tlacitka('dalsi')">Další ➡</button>
         </div>
 
         <script>
             function stisk_tlacitka(akce) {
-                // Pošle požadavek na server
                 fetch('/api/stisk/' + akce, { method: 'POST' })
                 .then(response => {
                     if(response.ok) {
-                        // Trik: přidání časového razítka přinutí prohlížeč ignorovat cache a načíst nový obrázek
                         document.getElementById('display').src = '/screen?t=' + new Date().getTime();
                     }
                 });
@@ -126,25 +126,42 @@ def index():
 
 @app.route("/screen")
 def generate_screen():
-    """Vykreslí aktuální stránku do obrázku a pošle ji do prohlížeče."""
-    # V simulátoru kreslíme rovnou RGB (nečleníme na černý a červený buffer)
-    img = Image.new("RGB", (880, 528), "white")
+    # NA VÝŠKU: Vytváříme plátno 528x880
+    img = Image.new("RGB", (528, 880), "white")
     draw = ImageDraw.Draw(img)
 
-    stranka = kniha_stranky[aktualni_stranka]
+    if not kniha_stranky:
+        draw.text(
+            (20, 20),
+            "Kniha je prázdná nebo se ji nepodařilo načíst.",
+            font=font_text,
+            fill=(0, 0, 0),
+        )
+    else:
+        stranka = kniha_stranky[aktualni_stranka]
 
-    # Vykreslení textu knihy (černě)
-    y_pozice = 20
-    for radek in stranka:
-        draw.text((20, y_pozice), radek, font=font_text, fill=(0, 0, 0))
-        y_pozice += 37
+        if stranka["typ"] == "obrazek":
+            img_obrazek = stranka["obsah"].convert("RGB")
+            # Centrování obrázku na novém rozměru
+            x = (528 - img_obrazek.width) // 2
+            y = (820 - img_obrazek.height) // 2
+            img.paste(img_obrazek, (x, y))
 
-    # Spodní stavová lišta (červeně)
-    draw.line((20, 528 - 40, 880 - 20, 528 - 40), fill=(220, 0, 0), width=2)
-    info_text = f"Strana {aktualni_stranka + 1} / {len(kniha_stranky)}"
-    draw.text((880 - 250, 528 - 35), info_text, font=font_info, fill=(220, 0, 0))
+        elif stranka["typ"] == "text":
+            y_pozice = 20
+            for radek in stranka["obsah"]:
+                draw.text((20, y_pozice), radek, font=font_text, fill=(0, 0, 0))
+                y_pozice += 37
 
-    # Uložení do paměti a odeslání
+        # Spodní stavová lišta
+        # Červená čára nyní končí na souřadnici X=508 (šířka 528 - 20)
+        # Y pozice je 840 (výška 880 - 40)
+        draw.line((20, 880 - 40, 528 - 20, 880 - 40), fill=(220, 0, 0), width=2)
+        info_text = f"Strana {aktualni_stranka + 1} / {len(kniha_stranky)}"
+
+        # Text lišty (zarovnáno doprava: 528 - 200 = 328)
+        draw.text((528 - 200, 880 - 35), info_text, font=font_info, fill=(220, 0, 0))
+
     img_io = io.BytesIO()
     img.save(img_io, "PNG")
     img_io.seek(0)
@@ -153,22 +170,21 @@ def generate_screen():
 
 @app.route("/api/stisk/<tlacitko>", methods=["POST"])
 def stisk(tlacitko):
-    """Logika tlačítek."""
     global aktualni_stranka
 
-    if tlacitko == "dalsi" and aktualni_stranka < len(kniha_stranky) - 1:
-        aktualni_stranka += 1
-        uloz_pozici(aktualni_kniha, aktualni_stranka)
-    elif tlacitko == "predchozi" and aktualni_stranka > 0:
-        aktualni_stranka -= 1
-        uloz_pozici(aktualni_kniha, aktualni_stranka)
-    elif tlacitko == "akce":
-        print("Stisknuto tlačítko Menu/Akce - zde bude tvoje logika")
+    if kniha_stranky:
+        if tlacitko == "dalsi" and aktualni_stranka < len(kniha_stranky) - 1:
+            aktualni_stranka += 1
+            uloz_pozici(aktualni_kniha, aktualni_stranka)
+        elif tlacitko == "predchozi" and aktualni_stranka > 0:
+            aktualni_stranka -= 1
+            uloz_pozici(aktualni_kniha, aktualni_stranka)
+        elif tlacitko == "akce":
+            print("Stisknuto tlačítko Menu/Akce")
 
     return "OK", 200
 
 
 if __name__ == "__main__":
-    # Spustí server na portu 5000
     print("Spouštím simulátor na http://127.0.0.1:5000")
     app.run(debug=True, host="0.0.0.0", port=5000)

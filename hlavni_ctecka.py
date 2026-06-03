@@ -47,17 +47,19 @@ except ImportError as e:
     print(f"Chyba Waveshare ovladače: {e}")
     sys.exit(1)
 
-# Import našich modulů
+# Import našich aktualizovaných modulů
 import zpracovani_epub  # noqa: E402
 import zpracovani_textu  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
+# Zachování tvé původní konfigurace pinů
 PIN_DALSI = 21
 PIN_PREDCHOZI = 26
 PIN_AKCE = 19
 
-aktualni_kniha = "test.epub"
+# Cesta ke knize na Malině (uprav si podle potřeby)
+aktualni_kniha = "epuby/Alliances.epub"
 aktualni_stranka = 0
 kniha_stranky = []
 prekreslit_displej = True
@@ -84,22 +86,26 @@ def stisk_akce_dlouhy():
 def main():
     global kniha_stranky, aktualni_stranka, prekreslit_displej, konec_programu, aktualni_kniha
 
-    logging.info(f"Načítám a formátuji knihu {aktualni_kniha}...")
-    cisty_text = zpracovani_epub.nacti_epub_text(aktualni_kniha)
+    logging.info(f"Načítám a formátuji knihu {aktualni_kniha} na výšku...")
     
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    font_text = ImageFont.truetype(font_path, 32)
-    font_info = ImageFont.truetype(font_path, 20)
+    try:
+        font_text = ImageFont.truetype(font_path, 32)
+        font_info = ImageFont.truetype(font_path, 20)
+    except IOError:
+        logging.warning("Systémový font nenalezen, používám defaultní.")
+        font_text = ImageFont.load_default()
+        font_info = ImageFont.load_default()
     
-    # Formátování pro displej 880x528 (s okraji)
-    radky = zpracovani_textu.zformatuj_pro_displej(cisty_text, font_text, 840)
-    kniha_stranky = zpracovani_textu.rozdel_na_stranky(radky, font_text, 468)
+    # Formátování na výšku (Šířka: 528 - 40px okraje = 488, Výška: 880 - 60px na lištu = 820)
+    obsah_knihy = zpracovani_epub.nacti_epub_obsah(aktualni_kniha, max_sirka=488, max_vyska=820)
+    kniha_stranky = zpracovani_textu.zformatuj_a_rozdel(obsah_knihy, font_text, 488, 820)
     
     aktualni_stranka = nacti_pozici(aktualni_kniha)
     if aktualni_stranka >= len(kniha_stranky):
         aktualni_stranka = max(0, len(kniha_stranky) - 1)
     
-    # Inicializace hardwaru
+    # Inicializace Waveshare hardwaru
     epd = epd7in5b_HD.EPD()
     epd.init()
     
@@ -113,27 +119,42 @@ def main():
 
     try:
         while not konec_programu:
-            if prekreslit_displej:
+            if prekreslit_displej and kniha_stranky:
                 logging.info(f"Kreslím stranu {aktualni_stranka + 1} / {len(kniha_stranky)}")
                 
-                image_black = Image.new('1', (epd.width, epd.height), 255)
-                image_red   = Image.new('1', (epd.width, epd.height), 255)
+                # Vytváříme pracovní plátno na VÝŠKU (528x880)
+                image_black = Image.new('1', (528, 880), 255)
+                image_red   = Image.new('1', (528, 880), 255)
                 draw_black  = ImageDraw.Draw(image_black)
                 draw_red    = ImageDraw.Draw(image_red)
 
                 stranka = kniha_stranky[aktualni_stranka]
                 
-                y_pozice = 20
-                for radek in stranka:
-                    draw_black.text((20, y_pozice), radek, font=font_text, fill=0)
-                    y_pozice += 37 
+                # 1. Vykreslení obsahu stránky
+                if stranka["typ"] == "obrazek":
+                    # Obrázek už je jednobitový (1), vložíme ho přímo do černého plátna
+                    x = (528 - stranka["obsah"].width) // 2
+                    y = (820 - stranka["obsah"].height) // 2
+                    image_black.paste(stranka["obsah"], (x, y))
+                    
+                elif stranka["typ"] == "text":
+                    y_pozice = 20
+                    for radek in stranka["obsah"]:
+                        draw_black.text((20, y_pozice), radek, font=font_text, fill=0)
+                        y_pozice += 37 
 
-                # Spodní stavová lišta (červená)
-                draw_red.line((20, epd.height - 40, epd.width - 20, epd.height - 40), fill=0, width=2)
+                # 2. Spodní stavová lišta (červená)
+                # Na výšku: X osa končí na 508, Y osa je na 840
+                draw_red.line((20, 880 - 40, 528 - 20, 880 - 40), fill=0, width=2)
                 info_text = f"Strana {aktualni_stranka + 1} / {len(kniha_stranky)}"
-                draw_red.text((epd.width - 250, epd.height - 35), info_text, font=font_info, fill=0)
+                draw_red.text((528 - 200, 880 - 35), info_text, font=font_info, fill=0)
 
-                epd.display(epd.getbuffer(image_black), epd.getbuffer(image_red))
+                # 3. HARDWAROVÉ OTOČENÍ: Překlopíme plátno z 528x880 zpět na nativních 880x528
+                image_black_rotated = image_black.rotate(90, expand=True)
+                image_red_rotated   = image_red.rotate(90, expand=True)
+
+                # Odeslání otočených bufferů do displeje
+                epd.display(epd.getbuffer(image_black_rotated), epd.getbuffer(image_red_rotated))
                 epd.sleep()
                 
                 prekreslit_displej = False
