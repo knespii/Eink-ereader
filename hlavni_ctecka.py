@@ -101,7 +101,7 @@ def otevri_knihu(nazev_souboru):
 
 def stisk_dalsi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
-    if probiha_vykreslovani: return
+    #if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if seznam_knih and vybrana_kniha_index < len(seznam_knih) - 1:
             vybrana_kniha_index += 1
@@ -114,7 +114,7 @@ def stisk_dalsi():
 
 def stisk_predchozi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
-    if probiha_vykreslovani: return
+    #if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if vybrana_kniha_index > 0:
             vybrana_kniha_index -= 1
@@ -127,7 +127,7 @@ def stisk_predchozi():
 
 def stisk_akce():
     global aktualni_stav, prekreslit_displej
-    if probiha_vykreslovani: return
+    #if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if seznam_knih:
             otevri_knihu(seznam_knih[vybrana_kniha_index])
