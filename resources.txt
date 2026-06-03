@@ -1,0 +1,5 @@
+pillow
+ebooklib
+beautifulsoup4
+gpiozero
+Flask
