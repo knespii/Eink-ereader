@@ -3,15 +3,14 @@ import os
 import time
 import logging
 import json
-import pickle  # <-- Přidáno pro bleskové cachování paměti
+import pickle
 from PIL import Image, ImageDraw, ImageFont
 from gpiozero import Button
 
 PROGRESS_FILE = "progress.json"
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-CACHE_DIR = "cache"  # Složka pro zmrazené knihy
+CACHE_DIR = "cache"
 
-# Vytvoření složek, pokud chybí
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
@@ -27,22 +26,18 @@ kniha_stranky = []
 
 prekreslit_displej = True
 konec_programu = False
-probiha_vykreslovani = False  # <-- Zámek proti vícenásobnému stisku
+probiha_vykreslovani = False
 
-# Globální instance pro fonty
 font_text = None
 font_info = None
 font_menu_titulek = None
 
-
-# --- POMOCNÉ FUNKCE PRO UKLÁDÁNÍ A DATA ---
 def nacti_seznam_knih():
     global seznam_knih
     if not os.path.exists(slozka_knih):
         os.makedirs(slozka_knih)
     seznam_knih = [f for f in os.listdir(slozka_knih) if f.endswith(".epub")]
     seznam_knih.sort()
-
 
 def nacti_pozici(kniha_id):
     if os.path.exists(PROGRESS_FILE):
@@ -54,7 +49,6 @@ def nacti_pozici(kniha_id):
             return 0
     return 0
 
-
 def uloz_pozici(kniha_id, stranka):
     data = {}
     if os.path.exists(PROGRESS_FILE):
@@ -63,7 +57,6 @@ def uloz_pozici(kniha_id, stranka):
                 data = json.load(f)
         except Exception:
             pass
-
     data[kniha_id] = stranka
     try:
         with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
@@ -71,9 +64,7 @@ def uloz_pozici(kniha_id, stranka):
     except Exception as e:
         logging.error(f"Chyba při ukládání pozice: {e}")
 
-
 def otevri_knihu(nazev_souboru):
-    """Inicializuje knihu - využívá Pickle cache pro bleskové načtení."""
     global aktualni_kniha, aktualni_stranka, kniha_stranky, aktualni_stav, prekreslit_displej
 
     aktualni_kniha = os.path.join(slozka_knih, nazev_souboru)
@@ -85,6 +76,11 @@ def otevri_knihu(nazev_souboru):
             kniha_stranky = pickle.load(f)
     else:
         logging.info(f"První parsování knihy {nazev_souboru} (tohle chvíli potrvá)...")
+        # --- OPTIMALIZACE: LÍNÉ NAČÍTÁNÍ TĚŽKÝCH KNIHOVEN ---
+        # Načtou se jen tehdy, pokud kniha ještě nebyla v cache. Zrychlí start aplikace!
+        import zpracovani_epub
+        import zpracovani_textu
+        
         obsah_knihy = zpracovani_epub.nacti_epub_obsah(
             aktualni_kniha, max_sirka=488, max_vyska=820
         )
@@ -103,12 +99,9 @@ def otevri_knihu(nazev_souboru):
     aktualni_stav = "CTENI"
     prekreslit_displej = True
 
-
-# --- OVLÁDÁNÍ HARDWAROVÝCH TLAČÍTEK ---
 def stisk_dalsi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
-    if probiha_vykreslovani: return  # Ignoruj stisk, pokud kreslí
-    
+    if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if seznam_knih and vybrana_kniha_index < len(seznam_knih) - 1:
             vybrana_kniha_index += 1
@@ -119,11 +112,9 @@ def stisk_dalsi():
             prekreslit_displej = True
             uloz_pozici(aktualni_kniha, aktualni_stranka)
 
-
 def stisk_predchozi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
     if probiha_vykreslovani: return
-    
     if aktualni_stav == "MENU":
         if vybrana_kniha_index > 0:
             vybrana_kniha_index -= 1
@@ -134,11 +125,9 @@ def stisk_predchozi():
             prekreslit_displej = True
             uloz_pozici(aktualni_kniha, aktualni_stranka)
 
-
 def stisk_akce():
     global aktualni_stav, prekreslit_displej
     if probiha_vykreslovani: return
-    
     if aktualni_stav == "MENU":
         if seznam_knih:
             otevri_knihu(seznam_knih[vybrana_kniha_index])
@@ -147,13 +136,10 @@ def stisk_akce():
         aktualni_stav = "MENU"
         prekreslit_displej = True
 
-
 def stisk_akce_dlouhy():
     global konec_programu
     konec_programu = True
 
-
-# --- NASTAVENÍ CESTY K OVLADAČI DISPLEJE ---
 current_dir = os.path.dirname(os.path.realpath(__file__))
 waveshare_dir = os.path.join(current_dir, "waveshare_epd")
 if os.path.exists(waveshare_dir):
@@ -165,16 +151,11 @@ except ImportError as e:
     print(f"Chyba Waveshare ovladače: {e}")
     sys.exit(1)
 
-import zpracovani_epub  # noqa: E402
-import zpracovani_textu  # noqa: E402
-
 logging.basicConfig(level=logging.INFO)
 
-# Konfigurace pinů
 PIN_DALSI = 21
 PIN_PREDCHOZI = 26
 PIN_AKCE = 19
-
 
 def main():
     global kniha_stranky, aktualni_stranka, prekreslit_displej
@@ -194,9 +175,8 @@ def main():
     nacti_seznam_knih()
 
     epd = epd7in5b_HD.EPD()
-    epd.init()
+    # --- OPTIMALIZACE: Odstraněno zbytečné epd.init() mimo smyčku ---
 
-    # Zvýšili jsme bounce_time pro odstranění šumu (dvojitých stisků)
     btn_dalsi = Button(PIN_DALSI, bounce_time=0.2)
     btn_predchozi = Button(PIN_PREDCHOZI, bounce_time=0.2)
     btn_akce = Button(PIN_AKCE, bounce_time=0.2, hold_time=2.0)
@@ -209,7 +189,7 @@ def main():
     try:
         while not konec_programu:
             if prekreslit_displej:
-                probiha_vykreslovani = True  # Zamkneme tlačítka
+                probiha_vykreslovani = True
                 prekreslit_displej = False
                 
                 image_black = Image.new("1", (528, 880), 255)
@@ -269,7 +249,7 @@ def main():
                 )
                 epd.sleep()
                 
-                probiha_vykreslovani = False  # Odemkneme tlačítka
+                probiha_vykreslovani = False
             time.sleep(0.1)
 
     except KeyboardInterrupt:
@@ -277,7 +257,6 @@ def main():
     finally:
         logging.info("Ukončování čtečky...")
         epd7in5b_HD.epdconfig.module_exit()
-
 
 if __name__ == "__main__":
     main()
