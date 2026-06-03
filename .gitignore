@@ -1,0 +1,29 @@
+# =========================
+# Prostředí a cache (Python)
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# =========================
+# Složka s knihami a e-knihy
+# =========================
+# Ignoruje celou složku epuby v kořenovém adresáři
+/epuby/
+# Ignoruje jakýkoliv .epub soubor kdekoliv v projektu
+*.epub
+
+# =========================
+# Lokální stav čtečky
+# =========================
+# Zabrání přepisování uložené pozice mezi zařízeními
+progress.json
+
+# =========================
+# Systémové soubory
+# =========================
+.DS_Store
+Thumbs.db

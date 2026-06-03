@@ -1,0 +1,37 @@
+FÁZE 1: Hardware a Základní ovládání
+
+[ ] Zapojit fyzická tlačítka (Další stránka, Předchozí stránka, Menu/Zpět) na GPIO piny Maliny.
+
+[ ] Napsat testovací skript v Pythonu (pomocí knihovny gpiozero), který detekuje stisk a vypíše akci do terminálu.
+
+[ ] Vyřešit napájení (vybrat vhodnou powerbanku nebo bateriový modul pro Raspberry Pi a vymyslet systém zapínání/vypínání).
+
+FÁZE 2: Zpracování textů, formátů a dat
+
+[ ] Napsat parser pro čtení prostých .txt souborů.
+
+[ ] Implementovat knihovnu markdown pro překlad .md souborů (nadpisy, tučný text) do formátu pro e-ink.
+
+[ ] Nainstalovat knihovny ebooklib a BeautifulSoup pro rozbalení a extrakci textu a obrázků z .epub souborů.
+
+[ ] Vytvořit skript pro stahování RSS zpráv (pomocí knihovny feedparser), který stáhne a naformátuje aktuální články přes Wi-Fi.
+
+FÁZE 3: Logika stránkování (Engine čtečky)
+
+[ ] Naprogramovat funkci, která vezme dlouhý text a přesně ho rozseká na "stránky" tak, aby se vešel na plátno o velikosti 880 x 528 pixelů.
+
+[ ] Vytvořit systém ukládání pozice (např. do souboru progress.json), aby si čtečka pamatovala rozečtenou stránku u každé knihy.
+
+FÁZE 4: Uživatelské rozhraní (UI) a Přenos souborů
+
+[ ] Naprogramovat hlavní menu pro displej (seznam knih, poznámek a sekce RSS zpráv).
+
+[ ] Vytvořit jednoduchý webový server (např. přes mikro-framework Flask). Po zadání IP adresy do prohlížeče v PC/mobilu se otevře stránka, kam půjde jednoduše přetáhnout nový .epub, .md nebo .txt soubor a bezdrátově ho poslat do čtečky.
+
+FÁZE 5: Optimalizace na baterii a cesty
+
+[ ] Nastavit v Linuxu automatické spuštění Python skriptu čtečky ihned po nabootování Maliny.
+
+[ ] Naprogramovat automatické vypínání Wi-Fi modulu (když se zrovna nestahují RSS nebo neposílají knihy), aby se maximalizovala výdrž baterie.
+
+[ ] Zabudovat hardware do krabičky (3D tisk nebo upravený obal).
