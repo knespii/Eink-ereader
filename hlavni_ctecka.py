@@ -32,12 +32,14 @@ font_text = None
 font_info = None
 font_menu_titulek = None
 
+
 def nacti_seznam_knih():
     global seznam_knih
     if not os.path.exists(slozka_knih):
         os.makedirs(slozka_knih)
     seznam_knih = [f for f in os.listdir(slozka_knih) if f.endswith(".epub")]
     seznam_knih.sort()
+
 
 def nacti_pozici(kniha_id):
     if os.path.exists(PROGRESS_FILE):
@@ -48,6 +50,7 @@ def nacti_pozici(kniha_id):
         except Exception:
             return 0
     return 0
+
 
 def uloz_pozici(kniha_id, stranka):
     data = {}
@@ -64,15 +67,21 @@ def uloz_pozici(kniha_id, stranka):
     except Exception as e:
         logging.error(f"Chyba při ukládání pozice: {e}")
 
+
 def otevri_knihu(nazev_souboru):
-    global aktualni_kniha, aktualni_stranka, kniha_stranky, aktualni_stav, prekreslit_displej
+    global \
+        aktualni_kniha, \
+        aktualni_stranka, \
+        kniha_stranky, \
+        aktualni_stav, \
+        prekreslit_displej
 
     aktualni_kniha = os.path.join(slozka_knih, nazev_souboru)
     cache_soubor = os.path.join(CACHE_DIR, nazev_souboru + ".pkl")
 
     if os.path.exists(cache_soubor):
         logging.info(f"Bleskové načítání z cache: {nazev_souboru}")
-        with open(cache_soubor, 'rb') as f:
+        with open(cache_soubor, "rb") as f:
             kniha_stranky = pickle.load(f)
     else:
         logging.info(f"První parsování knihy {nazev_souboru} (tohle chvíli potrvá)...")
@@ -80,16 +89,16 @@ def otevri_knihu(nazev_souboru):
         # Načtou se jen tehdy, pokud kniha ještě nebyla v cache. Zrychlí start aplikace!
         import zpracovani_epub
         import zpracovani_textu
-        
+
         obsah_knihy = zpracovani_epub.nacti_epub_obsah(
             aktualni_kniha, max_sirka=488, max_vyska=820
         )
         kniha_stranky = zpracovani_textu.zformatuj_a_rozdel(
             obsah_knihy, font_text, 488, 820
         )
-        
+
         logging.info("Ukládám zformátovanou knihu do cache pro příště...")
-        with open(cache_soubor, 'wb') as f:
+        with open(cache_soubor, "wb") as f:
             pickle.dump(kniha_stranky, f)
 
     aktualni_stranka = nacti_pozici(aktualni_kniha)
@@ -99,9 +108,10 @@ def otevri_knihu(nazev_souboru):
     aktualni_stav = "CTENI"
     prekreslit_displej = True
 
+
 def stisk_dalsi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
-    #if probiha_vykreslovani: return
+    # if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if seznam_knih and vybrana_kniha_index < len(seznam_knih) - 1:
             vybrana_kniha_index += 1
@@ -112,9 +122,10 @@ def stisk_dalsi():
             prekreslit_displej = True
             uloz_pozici(aktualni_kniha, aktualni_stranka)
 
+
 def stisk_predchozi():
     global aktualni_stranka, vybrana_kniha_index, prekreslit_displej
-    #if probiha_vykreslovani: return
+    # if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if vybrana_kniha_index > 0:
             vybrana_kniha_index -= 1
@@ -125,9 +136,10 @@ def stisk_predchozi():
             prekreslit_displej = True
             uloz_pozici(aktualni_kniha, aktualni_stranka)
 
+
 def stisk_akce():
     global aktualni_stav, prekreslit_displej
-    #if probiha_vykreslovani: return
+    # if probiha_vykreslovani: return
     if aktualni_stav == "MENU":
         if seznam_knih:
             otevri_knihu(seznam_knih[vybrana_kniha_index])
@@ -136,9 +148,11 @@ def stisk_akce():
         aktualni_stav = "MENU"
         prekreslit_displej = True
 
+
 def stisk_akce_dlouhy():
     global konec_programu
     konec_programu = True
+
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 waveshare_dir = os.path.join(current_dir, "waveshare_epd")
@@ -156,6 +170,7 @@ logging.basicConfig(level=logging.INFO)
 PIN_DALSI = 21
 PIN_PREDCHOZI = 26
 PIN_AKCE = 19
+
 
 def main():
     global kniha_stranky, aktualni_stranka, prekreslit_displej
@@ -191,7 +206,7 @@ def main():
             if prekreslit_displej:
                 probiha_vykreslovani = True
                 prekreslit_displej = False
-                
+
                 image_black = Image.new("1", (528, 880), 255)
                 image_red = Image.new("1", (528, 880), 255)
                 draw_black = ImageDraw.Draw(image_black)
@@ -199,29 +214,59 @@ def main():
 
                 if aktualni_stav == "MENU":
                     logging.info("Vykresluji knihovnu...")
-                    draw_black.text((20, 20), "KNIHOVNA", font=font_menu_titulek, fill=0)
+                    draw_black.text(
+                        (20, 20), "KNIHOVNA", font=font_menu_titulek, fill=0
+                    )
                     draw_black.line((20, 75, 508, 75), fill=0, width=3)
 
                     if not seznam_knih:
-                        draw_black.text((20, 100), "Složka 'epuby' je prázdná.", font=font_text, fill=0)
+                        draw_black.text(
+                            (20, 100),
+                            "Složka 'epuby' je prázdná.",
+                            font=font_text,
+                            fill=0,
+                        )
                     else:
                         y_pozice = 110
                         for i, kniha in enumerate(seznam_knih):
                             nazev_bez_pripony = kniha[:-5]
-                            zobrazovany_nazev = nazev_bez_pripony if len(nazev_bez_pripony) < 25 else nazev_bez_pripony[:22] + "..."
+                            zobrazovany_nazev = (
+                                nazev_bez_pripony
+                                if len(nazev_bez_pripony) < 25
+                                else nazev_bez_pripony[:22] + "..."
+                            )
 
                             if i == vybrana_kniha_index:
-                                draw_black.rectangle((20, y_pozice - 2, 508, y_pozice + 42), fill=0)
-                                draw_black.text((35, y_pozice), zobrazovany_nazev, font=font_text, fill=255)
+                                draw_black.rectangle(
+                                    (20, y_pozice - 2, 508, y_pozice + 42), fill=0
+                                )
+                                draw_black.text(
+                                    (35, y_pozice),
+                                    zobrazovany_nazev,
+                                    font=font_text,
+                                    fill=255,
+                                )
                             else:
-                                draw_black.text((35, y_pozice), zobrazovany_nazev, font=font_text, fill=0)
+                                draw_black.text(
+                                    (35, y_pozice),
+                                    zobrazovany_nazev,
+                                    font=font_text,
+                                    fill=0,
+                                )
                             y_pozice += 55
 
                     draw_red.line((20, 880 - 40, 528 - 20, 880 - 40), fill=0, width=2)
-                    draw_red.text((20, 880 - 35), f"Počet knih: {len(seznam_knih)}", font=font_info, fill=0)
+                    draw_red.text(
+                        (20, 880 - 35),
+                        f"Počet knih: {len(seznam_knih)}",
+                        font=font_info,
+                        fill=0,
+                    )
 
                 elif aktualni_stav == "CTENI" and kniha_stranky:
-                    logging.info(f"Vykresluji text e-knihy, strana {aktualni_stranka + 1}")
+                    logging.info(
+                        f"Vykresluji text e-knihy, strana {aktualni_stranka + 1}"
+                    )
                     stranka = kniha_stranky[aktualni_stranka]
 
                     if stranka["typ"] == "obrazek":
@@ -232,23 +277,27 @@ def main():
                     elif stranka["typ"] == "text":
                         y_pozice = 20
                         for radek in stranka["obsah"]:
-                            draw_black.text((20, y_pozice), radek, font=font_text, fill=0)
+                            draw_black.text(
+                                (20, y_pozice), radek, font=font_text, fill=0
+                            )
                             y_pozice += 37
 
                     draw_red.line((20, 880 - 40, 528 - 20, 880 - 40), fill=0, width=2)
                     info_text = f"Strana {aktualni_stranka + 1} / {len(kniha_stranky)}"
-                    draw_red.text((528 - 200, 880 - 35), info_text, font=font_info, fill=0)
+                    draw_red.text(
+                        (528 - 200, 880 - 35), info_text, font=font_info, fill=0
+                    )
 
                 image_black_rotated = image_black.transpose(Image.ROTATE_90)
                 image_red_rotated = image_red.transpose(Image.ROTATE_90)
 
                 epd.init()
                 epd.display(
-                    epd.getbuffer(image_black_rotated),
-                    epd.getbuffer(image_red_rotated),
+                    list(image_black_rotated.tobytes()),
+                    list(image_red_rotated.tobytes()),
                 )
                 epd.sleep()
-                
+
                 probiha_vykreslovani = False
             time.sleep(0.1)
 
@@ -257,6 +306,7 @@ def main():
     finally:
         logging.info("Ukončování čtečky...")
         epd7in5b_HD.epdconfig.module_exit()
+
 
 if __name__ == "__main__":
     main()
