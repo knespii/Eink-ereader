@@ -17,7 +17,20 @@ def _inkoust(bitmapa):
 
 class TestCistota:
     def test_neimportuje_hardware(self):
-        assert "waveshare_epd" not in sys.modules
+        """Přes AST, ne přes sys.modules — ten může naplnit kdokoliv jiný."""
+        import ast
+
+        strom = ast.parse(open(vykresleni.__file__, encoding="utf-8").read())
+        importy = set()
+        for uzel in ast.walk(strom):
+            if isinstance(uzel, ast.Import):
+                importy.update(a.name.split(".")[0] for a in uzel.names)
+            elif isinstance(uzel, ast.ImportFrom) and uzel.module:
+                importy.add(uzel.module.split(".")[0])
+
+        assert "waveshare_epd" not in importy
+        assert "gpiozero" not in importy
+        assert "flask" not in importy
 
     def test_zdroj_nezna_waveshare_ani_rotaci(self):
         zdroj = open(vykresleni.__file__, encoding="utf-8").read()

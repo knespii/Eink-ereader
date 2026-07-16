@@ -11,6 +11,18 @@ panel fyzicky na šířku, je vlastnost tohohle kusu železa, ne vlastnost knihy
 
 import abc
 import logging
+import os
+import sys
+
+# Ovladač od Waveshare uvnitř sebe importuje sourozence nerelativně
+# (`import epdconfig`, ne `from . import epdconfig`). Aby to prošlo, musí být
+# na sys.path i adresář waveshare_epd/ sám — jinak import balíčku sice projde,
+# ale spadne na "No module named 'epdconfig'". Bez tohohle řádku běží čtečka
+# na DummyDriveru i s připojeným displejem.
+_KOREN = os.path.dirname(os.path.realpath(__file__))
+_ADRESAR_OVLADACE = os.path.join(_KOREN, "waveshare_epd")
+if os.path.isdir(_ADRESAR_OVLADACE) and _ADRESAR_OVLADACE not in sys.path:
+    sys.path.append(_ADRESAR_OVLADACE)
 
 
 class Displej(abc.ABC):
