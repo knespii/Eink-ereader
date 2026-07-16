@@ -1,0 +1,27 @@
+# Běhové závislosti čtečky. Verze jsou zafixované schválně.
+#
+# Pillow drž zvlášť pevně: rozvržení textu stojí přímo na getmetrics() a
+# getlength(), jejichž chování se mezi verzemi měnilo. Jiná verze = jinak
+# zalomený text. Po změně Pillow se sama zneplatní cache stránkování jen
+# tehdy, když zvýšíš VERZE_ALGORITMU v zpracovani_textu.py.
+Pillow==12.2.0
+
+# Čtení EPUBu
+EbookLib==0.20
+beautifulsoup4==4.14.3
+lxml==6.1.1
+
+# Tlačítka (na desktopu se naimportuje, ale piny fungují jen na Pi)
+gpiozero==2.0.1
+
+# Webový simulátor
+Flask==3.1.3
+
+# --- Co tady schválně není ---
+#
+# waveshare_epd: ovladač displeje není na PyPI. Nainstaluj ho zvlášť podle
+#   README; bez něj čtečka nespadne, jen běží s DummyDriverem naprázdno.
+#
+# lgpio: gpiozero na Raspberry Pi potřebuje backend pro piny. Na Raspberry Pi
+#   OS bývá předinstalovaný (python3-lgpio). Na desktopu není potřeba, testy
+#   používají mock piny.

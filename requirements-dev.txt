@@ -1,0 +1,4 @@
+# Navíc oproti requirements.txt — jen pro vývoj a testy.
+-r requirements.txt
+
+pytest==9.1.1
