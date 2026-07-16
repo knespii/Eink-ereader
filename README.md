@@ -124,5 +124,10 @@ Testy nad reálnou knihou se bez `epuby/` přeskočí.
 - **Cache se neuklízí.** Soubory pro staré fonty a verze algoritmu zůstávají
   ležet (~0,75 MB na knihu a konfiguraci).
 - **Dlouhá slova se nedělí.** Slovo širší než řádek (např. URL) přeteče.
-- **Čištění panelu stojí čas.** Každé 20. překreslení se čeká dvakrát tak
-  dlouho; lze doladit přes `PERIODA_CISTENI` v `hlavni_ctecka.py` (0 = vypnuto).
+- **Panel je pomalý a nedá se s tím nic dělat.** Naměřeno na Pi Zero W:
+  `display()` 99 s, `Clear()` 91 s. Tolik trvá jedno otočení stránky — je to
+  vlastnost tříbarevného e-inku, ne kódu (import a vykreslení zaberou 4,8 s).
+- **Čištění panelu je vypnuté** (`PERIODA_CISTENI = 0`). Tříbarevný panel jede
+  při každém `display()` plnou křivkou, takže obraz přepíše celý a duchy skoro
+  nenechává; `Clear()` by jen přidal 91 s čekání. Kdyby se duchové objevili,
+  nastav v `hlavni_ctecka.py` třeba 20.

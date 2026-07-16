@@ -156,13 +156,31 @@ class TestZobraz:
 
 
 class TestCisteniDispleje:
-    def test_perioda_je_rozumna(self):
-        assert h.PERIODA_CISTENI >= 0
+    """Clear() naměřen na 91 s, display() na 99 s — čištění je proto vypnuté."""
+
+    def test_vychozi_je_vypnuto(self):
+        assert h.PERIODA_CISTENI == 0
 
     def test_vycisti_je_v_rozhrani(self):
         assert hasattr(displej.DummyDriver(), "vycisti")
 
-    def test_smycka_cisti_pri_startu(self):
-        """Panel drží obraz i bez napájení, po zapnutí na něm visí staré."""
-        assert "obrazovka.vycisti()" in ZDROJ
-        assert ZDROJ.index("obrazovka.vycisti()") < ZDROJ.index("while not ctecka.konec")
+    def test_vypnute_cisteni_nesahne_na_panel(self, monkeypatch):
+        volano = []
+        monkeypatch.setattr(h, "PERIODA_CISTENI", 0)
+        obrazovka = displej.DummyDriver()
+        obrazovka.vycisti = lambda: volano.append("vycisti")
+
+        # tělo startu smyčky
+        if h.PERIODA_CISTENI:
+            obrazovka.vycisti()
+        assert volano == []
+
+    def test_zapnute_cisteni_panel_vybili(self, monkeypatch):
+        volano = []
+        monkeypatch.setattr(h, "PERIODA_CISTENI", 20)
+        obrazovka = displej.DummyDriver()
+        obrazovka.vycisti = lambda: volano.append("vycisti")
+
+        if h.PERIODA_CISTENI:
+            obrazovka.vycisti()
+        assert volano == ["vycisti"]

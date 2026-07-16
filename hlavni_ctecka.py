@@ -25,10 +25,15 @@ PIN_AKCE = 19
 DOBA_ZAKMITU = 0.1
 DOBA_DRZENI = 2.0
 
-# Po kolika překresleních panel vybílit, aby se spálily zbytky předchozích
-# stránek. Čištění trvá zhruba jako překreslení, takže každou dvacátou stránku
-# se čeká dvakrát tak dlouho — kdyby to vadilo, dej víc; 0 čištění vypne.
-PERIODA_CISTENI = 20
+# Po kolika překresleních panel vybílit kvůli duchům. Vypnuto (0), protože
+# na tomhle panelu se to nevyplácí: naměřeno Clear() 91 s a display() 99 s,
+# takže čištění není o něco pomalejší — je to celé další čekání navíc. A jde
+# hlavně o to, že tříbarevný panel jede při každém display() plnou křivkou,
+# takže obraz přepíše celý a duchy po sobě prakticky nenechává.
+#
+# Kdyby se duchové přesto objevili, dej sem třeba 20: čistit se pak bude při
+# startu a po každých 20 překresleních, za cenu +91 s pokaždé.
+PERIODA_CISTENI = 0
 
 
 def zobraz(obrazovka, ctecka, fonty):
@@ -86,9 +91,10 @@ def main():
     obrazovka = displej.vytvor_displej()
     tlacitka = pripoj_tlacitka(ctecka)
 
-    # Panel drží obraz i bez napájení, takže po zapnutí na něm visí to, co tam
-    # zbylo z minula. Jedno vybílení na začátku je tedy vždycky na místě.
-    obrazovka.vycisti()
+    # Panel sice drží obraz i bez napájení, ale první display() ho celý
+    # přepíše, takže vybílit ho předtím jen zdvojuje čekání na první stránku.
+    if PERIODA_CISTENI:
+        obrazovka.vycisti()
     od_cisteni = 0
 
     try:
