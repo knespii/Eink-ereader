@@ -117,6 +117,35 @@ Knihy nakopíruj do `epuby/` (složka je v `.gitignore`).
 .venv/bin/python simulator.py         # simulátor na http://127.0.0.1:5000
 ```
 
+## Automatické spuštění po zapnutí
+
+Aby čtečka naskočila sama po každém připojení Pi k napájení, nainstaluj
+systemd službu:
+
+```bash
+./install-sluzba.sh
+```
+
+Skript doplní do [`ctecka.service`](ctecka.service) aktuálního uživatele a cestu,
+zaregistruje jednotku a rovnou ji spustí. Od té chvíle běží čtečka na pozadí:
+
+```bash
+sudo systemctl status ctecka      # běží?
+journalctl -u ctecka -f           # živý log
+sudo systemctl disable --now ctecka   # zrušit autostart
+```
+
+Dlouhý stisk čtečku ukončí čistě (návrat 0), takže se nerestartuje a zůstane
+vypnutá do dalšího zapnutí Pi. E-ink si přitom podrží poslední stránku. Po pádu
+(nenulový návrat) služba naopak startuje znovu.
+
+Služba běží pod tvým uživatelem, ne pod rootem — potřebuje tedy přístup k GPIO
+a SPI. Když v logu uvidíš chybu oprávnění, přidej se do skupin a restartuj:
+
+```bash
+sudo usermod -aG gpio,spi "$USER"
+```
+
 ## Testy
 
 ```bash

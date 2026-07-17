@@ -1,0 +1,19 @@
+[Unit]
+Description=E-ink čtečka EPUB (autostart po zapnutí)
+# Až je systém plně nahraný a souborový systém připravený. Čtečka nepotřebuje
+# síť, takže se na ni nečeká.
+After=multi-user.target
+
+[Service]
+Type=simple
+# Placeholdery vyplní install-sluzba.sh podle skutečného uživatele a cesty.
+User=__UZIVATEL__
+WorkingDirectory=__ADRESAR__
+ExecStart=__ADRESAR__/.venv/bin/python __ADRESAR__/hlavni_ctecka.py
+# Po pádu (nenulový návrat) čtečku nastartuj znovu. Dlouhý stisk ukončí program
+# s návratem 0 — ten se nerestartuje, čtečka zůstane vypnutá do dalšího zapnutí.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
