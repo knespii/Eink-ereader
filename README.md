@@ -96,6 +96,18 @@ Bez něj čtečka nespadne — `vytvor_displej()` sáhne po `DummyDriveru` a pob
 naprázdno. Na Pi je ještě potřeba backend pro piny (`sudo apt install python3-lgpio`)
 a povolené SPI (`sudo raspi-config` → Interface Options → SPI).
 
+Ovladač musí používat **hardwarové SPI** (`epdconfig` přes `spidev`) a mít
+`spi_writebyte2` — to má aktuální oficiální verze. Starší varianty se software
+SPI (soubory `sysfs_software_spi.so`) `spi_writebyte2` nemají; `WaveshareDriver`
+se pak vrátí k původnímu bajtovému `display()`, který na Pi Zero W trvá ~90 s.
+Ověř to takto:
+
+```bash
+.venv/bin/python -c "from waveshare_epd import epdconfig; print(hasattr(epdconfig, 'spi_writebyte2'))"
+```
+
+`True` → hotovo. `False` → přeinstaluj ovladač z příkazu výše.
+
 Knihy nakopíruj do `epuby/` (složka je v `.gitignore`).
 
 ## Spuštění
@@ -124,10 +136,10 @@ Testy nad reálnou knihou se bez `epuby/` přeskočí.
 - **Cache se neuklízí.** Soubory pro staré fonty a verze algoritmu zůstávají
   ležet (~0,75 MB na knihu a konfiguraci).
 - **Dlouhá slova se nedělí.** Slovo širší než řádek (např. URL) přeteče.
-- **Panel je pomalý a nedá se s tím nic dělat.** Naměřeno na Pi Zero W:
-  `display()` 99 s, `Clear()` 91 s. Tolik trvá jedno otočení stránky — je to
-  vlastnost tříbarevného e-inku, ne kódu (import a vykreslení zaberou 4,8 s).
-- **Čištění panelu je vypnuté** (`PERIODA_CISTENI = 0`). Tříbarevný panel jede
-  při každém `display()` plnou křivkou, takže obraz přepíše celý a duchy skoro
-  nenechává; `Clear()` by jen přidal 91 s čekání. Kdyby se duchové objevili,
-  nastav v `hlavni_ctecka.py` třeba 20.
+- **Otočení stránky trvá ~10 s** a s tím se nedá nic dělat — tolik zabere
+  budicí křivka tříbarevného panelu. Částečné překreslení (jako u čteček
+  Kindle) tenhle panel neumí, protože pohyb červeného pigmentu vyžaduje plnou
+  křivku přes celý panel.
+- **Čištění panelu je vypnuté** (`PERIODA_CISTENI = 0`). Panel jede při každém
+  `display()` plnou křivkou, takže obraz přepíše celý a duchy skoro nenechává.
+  Kdyby se přesto objevili, nastav v `hlavni_ctecka.py` třeba 20.

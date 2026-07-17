@@ -48,6 +48,63 @@ class Displej(abc.ABC):
         """Uvolní hardware. Volá se jednou při ukončení programu."""
 
 
+# --- Rychlý zápis dat na panel epd7in5b_HD ---
+#
+# Ovladač od Waveshare posílá obraz po jednom bajtu: display() zavolá 116 160×
+# send_data() a každé volání třikrát cvakne GPIO (dc, cs dolů, cs nahoru). Na
+# Pi Zero W je to ~460 tisíc pomalých gpiozero operací, tedy kolem 90 sekund —
+# a to i s hardwarovým SPI, protože brzdí ta obsluha pinů, ne přenos. Přitom
+# 116 KB na 4 MHz proteče za ~0,23 s.
+#
+# Reprodukujeme proto tutéž příkazovou sekvenci, ale oba buffery pošleme jedním
+# hromadným writebytes2 s CS drženým dole po celý blok. Do panelu jdou úplně
+# stejné bajty, jen se u každého zvlášť necvaká pin. Sekvence odpovídá display()
+# a Clear() aktuálního epd7in5b_HD.py; kdyby ji Waveshare změnili, drží se
+# pojistka na epd.display() (viz _zvladne_hromadne).
+_CMD_NASTAV = 0x4F
+_CMD_CERNA = 0x24
+_CMD_CERVENA = 0x26
+_CMD_NACTI_LUT = 0x22
+_CMD_OBNOV = 0x20
+
+
+def _posli_blok(epd, cfg, prikaz, data):
+    """Příkaz a k němu celý datový blok jediným hromadným SPI přenosem."""
+    epd.send_command(prikaz)
+    cfg.digital_write(epd.dc_pin, 1)
+    cfg.digital_write(epd.cs_pin, 0)
+    cfg.spi_writebyte2(list(data))
+    cfg.digital_write(epd.cs_pin, 1)
+
+
+def _obnov_a_cekej(epd, cfg):
+    epd.send_command(_CMD_NACTI_LUT)
+    epd.send_data(0xC7)
+    epd.send_command(_CMD_OBNOV)
+    cfg.delay_ms(200)
+    epd.ReadBusy()
+
+
+def rychle_zobraz(epd, cfg, cerna_buf, cervena_buf):
+    """Bajtově shodné s epd.display(), ale hromadným přenosem."""
+    epd.send_command(_CMD_NASTAV)
+    epd.send_data(0xAF)
+    _posli_blok(epd, cfg, _CMD_CERNA, cerna_buf)
+    # Červená vrstva se do panelu posílá invertovaná (viz display(): ~imagered).
+    _posli_blok(epd, cfg, _CMD_CERVENA, [~b & 0xFF for b in cervena_buf])
+    _obnov_a_cekej(epd, cfg)
+
+
+def rychle_vycisti(epd, cfg):
+    """Bajtově shodné s epd.Clear(), ale hromadným přenosem."""
+    bajtu = int(epd.width * epd.height / 8)
+    epd.send_command(_CMD_NASTAV)
+    epd.send_data(0xAF)
+    _posli_blok(epd, cfg, _CMD_CERNA, [0xFF] * bajtu)
+    _posli_blok(epd, cfg, _CMD_CERVENA, [0x00] * bajtu)
+    _obnov_a_cekej(epd, cfg)
+
+
 class WaveshareDriver(Displej):
     """Waveshare 7.5" HD tříbarevný panel (epd7in5b_HD), fyzicky 880×528."""
 
@@ -59,20 +116,34 @@ class WaveshareDriver(Displej):
         self._modul = epd7in5b_HD
         self._epd = epd7in5b_HD.EPD()
 
+    def _zvladne_hromadne(self):
+        """Má epdconfig hromadný přenos a driver očekávané vnitřnosti?
+
+        Starší epdconfig (např. verze se software SPI přes .so) spi_writebyte2
+        nemá — tam se spadne zpět na pomalý, ale funkční epd.display().
+        """
+        return hasattr(self._modul.epdconfig, "spi_writebyte2") and all(
+            hasattr(self._epd, a) for a in ("dc_pin", "cs_pin", "send_command", "ReadBusy")
+        )
+
     def zobraz(self, cerna, cervena):
-        otocena_cerna = cerna.rotate(90, expand=True)
-        otocena_cervena = cervena.rotate(90, expand=True)
+        cerna_buf = self._epd.getbuffer(cerna.rotate(90, expand=True))
+        cervena_buf = self._epd.getbuffer(cervena.rotate(90, expand=True))
 
         self._epd.init()
-        self._epd.display(
-            self._epd.getbuffer(otocena_cerna),
-            self._epd.getbuffer(otocena_cervena),
-        )
+        if self._zvladne_hromadne():
+            rychle_zobraz(self._epd, self._modul.epdconfig, cerna_buf, cervena_buf)
+        else:
+            logging.warning("Hromadný SPI přenos není k dispozici, kreslím pomalu.")
+            self._epd.display(cerna_buf, cervena_buf)
         self._epd.sleep()
 
     def vycisti(self):
         self._epd.init()
-        self._epd.Clear()
+        if self._zvladne_hromadne():
+            rychle_vycisti(self._epd, self._modul.epdconfig)
+        else:
+            self._epd.Clear()
         self._epd.sleep()
 
     def vypni(self):
