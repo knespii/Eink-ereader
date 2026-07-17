@@ -35,8 +35,10 @@ def docasna_cache(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def docasne_pozice(tmp_path, monkeypatch):
-    """progress.json mimo repozitář — jinak by testy smazaly rozečtené knihy."""
+    """progress.json a posledni_stav.json mimo repozitář — jinak by testy
+    přepsaly rozečtené knihy a poslední stav uživatele."""
     monkeypatch.setattr(knihovna, "SOUBOR_POZIC", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(knihovna, "SOUBOR_STAVU", str(tmp_path / "posledni_stav.json"))
 
 
 @pytest.fixture(scope="session")

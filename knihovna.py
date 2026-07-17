@@ -22,6 +22,23 @@ import zpracovani_textu
 KOREN = os.path.dirname(os.path.realpath(__file__))
 SLOZKA_KNIH = os.path.join(KOREN, "epuby")
 SOUBOR_POZIC = os.path.join(KOREN, "progress.json")
+# Poslední zobrazený stav — aby čtečka po zapnutí navázala tam, kde skončila,
+# bez zbytečného překreslení (e-ink drží obraz i bez napájení).
+SOUBOR_STAVU = os.path.join(KOREN, "posledni_stav.json")
+
+
+def _zapis_json_atomicky(cesta, data):
+    """Zápis stranou a přejmenování: čtečka se vypíná odpojením napájení, takže
+    zápis přímo do souboru by při smůle nechal useknutý JSON."""
+    docasny = f"{cesta}.tmp"
+    try:
+        with open(docasny, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+            f.flush()
+            os.fsync(f.fileno())  # bez tohohle může přejmenování předběhnout data
+        os.replace(docasny, cesta)
+    except OSError as e:
+        logging.error("Zápis do %s selhal: %s", cesta, e)
 
 
 def nacti_seznam_knih():
@@ -49,16 +66,7 @@ def uloz_pozici(kniha, stranka):
     """
     pozice = nacti_pozice()
     pozice[kniha] = stranka
-
-    docasny = f"{SOUBOR_POZIC}.tmp"
-    try:
-        with open(docasny, "w", encoding="utf-8") as f:
-            json.dump(pozice, f, ensure_ascii=False, indent=4)
-            f.flush()
-            os.fsync(f.fileno())  # bez tohohle může přejmenování předběhnout data
-        os.replace(docasny, SOUBOR_POZIC)
-    except OSError as e:
-        logging.error("Pozici se nepodařilo uložit: %s", e)
+    _zapis_json_atomicky(SOUBOR_POZIC, pozice)
 
 
 def nacti_stranky(nazev, fonty):
@@ -119,3 +127,54 @@ def obsluz(ctecka, fonty):
     pozice = ctecka.vyzvedni_pozici_k_ulozeni()
     if pozice:
         uloz_pozici(*pozice)
+
+
+# --- POSLEDNÍ ZOBRAZENÝ STAV (obnova po zapnutí) ---
+
+
+def uloz_posledni_stav(snimek):
+    """Zapíše, co je právě na displeji, aby se po zapnutí navázalo bez bliknutí."""
+    from stav import Stav
+
+    if snimek.stav is Stav.CTENI and snimek.kniha:
+        stav = {"typ": "cteni", "kniha": snimek.kniha, "stranka": snimek.cislo_stranky - 1}
+    else:
+        stav = {"typ": "menu", "vyber": snimek.vyber}
+    _zapis_json_atomicky(SOUBOR_STAVU, stav)
+
+
+def nacti_posledni_stav():
+    try:
+        with open(SOUBOR_STAVU, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        logging.error("Poslední stav nejde přečíst: %s", e)
+        return None
+
+
+def obnov_posledni_stav(ctecka, fonty):
+    """Vrátí čtečku tam, kde skončila. Bez překreslení — panel obraz drží.
+
+    Vrací True, když obnovený stav odpovídá tomu, co panel ukazuje. Vrací
+    False, když se kniha nepodařilo obnovit (smazaná) — pak panel drží starou
+    stránku a volající si má vyžádat překreslení, ať se displej srovná.
+    """
+    stav = nacti_posledni_stav()
+    if not stav:
+        return False
+
+    if stav.get("typ") == "cteni":
+        if stav.get("kniha") in nacti_seznam_knih():
+            nazev = stav["kniha"]
+            stranky = nacti_stranky(nazev, fonty)
+            if ctecka.obnov_cteni(nazev, stranky, stav.get("stranka", 0)):
+                return True
+        return False  # kniha zmizela — panel drží stránku, kterou už neotevřeme
+
+    if stav.get("typ") == "menu":
+        ctecka.obnov_menu(stav.get("vyber", 0))
+        return True
+
+    return False

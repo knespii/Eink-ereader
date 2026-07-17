@@ -64,7 +64,7 @@ class Ctecka:
     tlačítek a smí se volat z cizích vláken. Ostatní metody patří hlavní smyčce.
     """
 
-    def __init__(self, seznam_knih=None):
+    def __init__(self, seznam_knih=None, prekreslit_na_startu=True):
         self._zamek = threading.Condition()
 
         self._stav = Stav.MENU
@@ -85,6 +85,11 @@ class Ctecka:
 
         if seznam_knih is not None:
             self.nastav_seznam_knih(seznam_knih)
+
+        # Nastavuje se až nakonec: nastav_seznam_knih() výše si vyžádá
+        # překreslení, ale při obnově po startu ho nechceme — e-ink drží obraz
+        # z minula, takže se nemá co překreslovat, dokud uživatel nezmáčkne.
+        self._prekreslit = prekreslit_na_startu
 
     # --- STAV PRO VYKRESLENÍ ---
 
@@ -162,6 +167,33 @@ class Ctecka:
 
             self._zadej_prekresleni()
             return True
+
+    # --- OBNOVENÍ POSLEDNÍHO STAVU PO STARTU ---
+    # Obnova záměrně nevyžaduje překreslení: panel drží obraz z minula, takže
+    # displej už tu správnou věc ukazuje. První stisk tlačítka pak překreslí.
+
+    def obnov_cteni(self, nazev, stranky, stranka):
+        """Vrátí čtečku do knihy na danou stránku, bez vyžádání překreslení."""
+        if not stranky:
+            return False
+        with self._zamek:
+            self._kniha = nazev
+            self._stranky = stranky
+            self._stranka = max(0, min(stranka, len(stranky) - 1))
+            self._stav = Stav.CTENI
+            return True
+
+    def obnov_menu(self, vyber):
+        """Vrátí kurzor v menu na danou položku, bez vyžádání překreslení."""
+        with self._zamek:
+            if self._seznam_knih:
+                self._vyber = max(0, min(vyber, len(self._seznam_knih) - 1))
+
+    def vyzadej_prekresleni(self):
+        """Vynutí překreslení. Používá se, když obnova po startu neseděla a
+        panel drží obraz, který už neodpovídá stavu."""
+        with self._zamek:
+            self._zadej_prekresleni()
 
     # --- OBSLUHA TLAČÍTEK (volá se z cizích vláken) ---
 

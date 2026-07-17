@@ -136,8 +136,19 @@ sudo systemctl disable --now ctecka   # zrušit autostart
 ```
 
 Dlouhý stisk čtečku ukončí čistě (návrat 0), takže se nerestartuje a zůstane
-vypnutá do dalšího zapnutí Pi. E-ink si přitom podrží poslední stránku. Po pádu
-(nenulový návrat) služba naopak startuje znovu.
+vypnutá do dalšího zapnutí Pi. Po pádu (nenulový návrat) služba naopak startuje
+znovu.
+
+### Navázání tam, kde jsi skončil
+
+E-ink drží obraz i bez napájení, čehož čtečka využívá. Poslední zobrazený stav
+(kniha a stránka, nebo pozice v menu) se ukládá do `posledni_stav.json` a po
+zapnutí se obnoví **bez překreslení** — na displeji je pořád tvoje poslední
+stránka, nic nebliká a čtečka pokračuje až po stisku tlačítka.
+
+Funguje to, když čtečku vypínáš odpojením napájení na nějaké stránce (typický
+scénář). Kdyby se panel mezitím smazal nebo byla otevřená kniha smazaná,
+displej se při startu jednou překreslí, aby odpovídal skutečnosti.
 
 Služba běží pod tvým uživatelem, ne pod rootem — potřebuje tedy přístup k GPIO
 a SPI. Když v logu uvidíš chybu oprávnění, přidej se do skupin a restartuj:

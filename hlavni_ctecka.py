@@ -42,6 +42,8 @@ def zobraz(obrazovka, ctecka, fonty):
         snimek, fonty, knihovna.nacti_obrazek_knihy(snimek.kniha)
     )
     obrazovka.zobraz(cerna, cervena)
+    # Uloží se, co je teď na panelu, aby po zapnutí bylo kam navázat.
+    knihovna.uloz_posledni_stav(snimek)
 
 
 def pripoj_tlacitka(ctecka):
@@ -87,7 +89,17 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 
     fonty = vykresleni.nacti_fonty()
-    ctecka = Ctecka(knihovna.nacti_seznam_knih())
+
+    # Obnova posledního stavu bez překreslení: po zapnutí panel drží obraz,
+    # kde jsi skončil, a čtečka na něj naváže. Když nic uloženého není (první
+    # spuštění), startuje se v menu s běžným překreslením.
+    obnovit = knihovna.nacti_posledni_stav() is not None
+    ctecka = Ctecka(knihovna.nacti_seznam_knih(), prekreslit_na_startu=not obnovit)
+    if obnovit and not knihovna.obnov_posledni_stav(ctecka, fonty):
+        # Uložený stav neseděl (např. smazaná kniha) — panel drží něco jiného,
+        # ať se překreslí, aby displej odpovídal skutečnosti.
+        ctecka.vyzadej_prekresleni()
+
     obrazovka = displej.vytvor_displej()
     tlacitka = pripoj_tlacitka(ctecka)
 

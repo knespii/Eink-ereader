@@ -21,6 +21,7 @@ env/
 # =========================
 # Zabrání přepisování uložené pozice mezi zařízeními
 progress.json
+posledni_stav.json
 
 # =========================
 # Systémové soubory
