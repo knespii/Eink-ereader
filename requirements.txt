@@ -11,8 +11,13 @@ EbookLib==0.20
 beautifulsoup4==4.14.3
 lxml==6.1.1
 
-# Tlačítka (na desktopu se naimportuje, ale piny fungují jen na Pi)
+# Tlačítka a rotační kodér (na desktopu se naimportuje, piny fungují jen na Pi)
 gpiozero==2.0.1
+
+# OLED 128×32 pro menu (I2C, SSD1306). Bez něj čtečka nespadne — oled_ui
+# vytvor_oled() spadne na atrapu a menu se dá ovládat naslepo tlačítky.
+# Vyžaduje povolené I2C: sudo raspi-config nointeractive do_i2c 0
+luma.oled==3.15.0
 
 # Webový simulátor
 Flask==3.1.3
