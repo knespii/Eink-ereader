@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Jediný zdroj pravdy, přesně jako na Pi. Ctecka je thread-safe, takže na ni
 # smí souběžně sáhnout víc obsluh Flasku najednou.
 fonty = vykresleni.nacti_fonty()
-ctecka = Ctecka(knihovna.nacti_seznam_knih())
+ctecka = Ctecka(knihovna.nacti_strom())
 
 BARVA_INKOUSTU = (0, 0, 0)
 BARVA_CERVENE = (220, 0, 0)
@@ -124,8 +124,8 @@ def stisk(tlacitko):
     # A tohle je to, co na Pi udělá hlavní smyčka — načte knihu, uloží pozici.
     knihovna.obsluz(ctecka, fonty)
 
-    # Nové knihy ve složce se tím ukážou samy.
-    ctecka.nastav_seznam_knih(knihovna.nacti_seznam_knih())
+    # Nové knihy a složky se tím ukážou samy.
+    ctecka.nastav_seznam_knih(knihovna.nacti_strom())
     return "OK", 200
 
 

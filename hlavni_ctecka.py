@@ -94,7 +94,7 @@ def main():
     # kde jsi skončil, a čtečka na něj naváže. Když nic uloženého není (první
     # spuštění), startuje se v menu s běžným překreslením.
     obnovit = knihovna.nacti_posledni_stav() is not None
-    ctecka = Ctecka(knihovna.nacti_seznam_knih(), prekreslit_na_startu=not obnovit)
+    ctecka = Ctecka(knihovna.nacti_strom(), prekreslit_na_startu=not obnovit)
     if obnovit and not knihovna.obnov_posledni_stav(ctecka, fonty):
         # Uložený stav neseděl (např. smazaná kniha) — panel drží něco jiného,
         # ať se překreslí, aby displej odpovídal skutečnosti.
@@ -124,9 +124,9 @@ def main():
             # Drahá práce patří sem, ne do callbacku tlačítka.
             knihovna.obsluz(ctecka, fonty)
 
-            # Nové knihy ve složce se tím ukážou samy, bez restartu.
+            # Nové knihy a složky se tím ukážou samy, bez restartu.
             if ctecka.snimek().stav is Stav.MENU:
-                ctecka.nastav_seznam_knih(knihovna.nacti_seznam_knih())
+                ctecka.nastav_seznam_knih(knihovna.nacti_strom())
 
     except KeyboardInterrupt:
         pass

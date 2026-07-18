@@ -3,6 +3,8 @@
 import os
 import time
 
+import pytest
+
 import knihovna
 
 
@@ -125,3 +127,68 @@ class TestNactiObrazekKnihy:
         loader = knihovna.nacti_obrazek_knihy("Treason.epub")
         assert callable(loader)
         assert loader("neexistuje/v/archivu.jpg") is None
+
+
+class TestStrom:
+    """Skenování knihovny: jedna úroveň složek, nic hlouběji."""
+
+    def _knihovna(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(knihovna, "SLOZKA_KNIH", str(tmp_path))
+        return tmp_path
+
+    def test_koren_i_slozka(self, tmp_path, monkeypatch):
+        self._knihovna(tmp_path, monkeypatch)
+        (tmp_path / "koren.epub").touch()
+        (tmp_path / "scifi").mkdir()
+        (tmp_path / "scifi" / "duna.epub").touch()
+
+        strom = knihovna.nacti_strom()
+        assert set(strom) == {"", "scifi"}
+        assert {p["nazev"]: p["typ"] for p in strom[""]} == {
+            "koren.epub": "kniha",
+            "scifi": "slozka",
+        }
+        assert [p["cesta"] for p in strom["scifi"]] == ["scifi/duna.epub"]
+
+    def test_zanorena_slozka_se_ignoruje(self, tmp_path, monkeypatch):
+        """Zadání povoluje jen 1. úroveň — hlouběji se nekouká."""
+        self._knihovna(tmp_path, monkeypatch)
+        (tmp_path / "scifi" / "hlubs").mkdir(parents=True)
+        (tmp_path / "scifi" / "hlubs" / "skryta.epub").touch()
+
+        strom = knihovna.nacti_strom()
+        assert "scifi/hlubs" not in strom
+        assert strom["scifi"] == []  # samotná podsložka se nehlásí ani jako položka
+
+    def test_neepub_soubory_se_ignoruji(self, tmp_path, monkeypatch):
+        self._knihovna(tmp_path, monkeypatch)
+        (tmp_path / "poznamky.txt").touch()
+        (tmp_path / "kniha.epub").touch()
+        assert [p["nazev"] for p in knihovna.nacti_strom()[""]] == ["kniha.epub"]
+
+    def test_seznam_knih_vraci_relativni_cesty(self, tmp_path, monkeypatch):
+        self._knihovna(tmp_path, monkeypatch)
+        (tmp_path / "koren.epub").touch()
+        (tmp_path / "scifi").mkdir()
+        (tmp_path / "scifi" / "duna.epub").touch()
+        assert sorted(knihovna.nacti_seznam_knih()) == ["koren.epub", "scifi/duna.epub"]
+
+    def test_prazdna_knihovna(self, tmp_path, monkeypatch):
+        self._knihovna(tmp_path, monkeypatch)
+        assert knihovna.nacti_strom() == {"": []}
+
+
+class TestBezpecnaCesta:
+    """Cesty jdou do progress.json — ručně upravený soubor nesmí sáhnout ven."""
+
+    def test_odmitne_uniku_ze_slozky(self):
+        with pytest.raises(ValueError):
+            knihovna._bezpecna_cesta("../../etc/passwd")
+
+    def test_odmitne_unik_pres_podslozku(self):
+        with pytest.raises(ValueError):
+            knihovna._bezpecna_cesta("scifi/../../tajne.epub")
+
+    def test_pusti_beznou_cestu(self):
+        cesta = knihovna._bezpecna_cesta("scifi/duna.epub")
+        assert cesta.startswith(knihovna.SLOZKA_KNIH)

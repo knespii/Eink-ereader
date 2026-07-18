@@ -84,7 +84,41 @@ class TestPersistence:
         c = Ctecka(["a.epub", "b.epub"])
         c.dalsi()
         knihovna.uloz_posledni_stav(c.snimek())
-        assert knihovna.nacti_posledni_stav() == {"typ": "menu", "vyber": 1}
+        assert knihovna.nacti_posledni_stav() == {
+            "typ": "menu",
+            "vyber": 1,
+            "adresar": "",
+        }
+
+    def test_ulozeni_menu_uvnitr_slozky(self):
+        """Adresář se musí uložit, jinak se čtečka po zapnutí probere v kořeni."""
+        c = Ctecka(
+            {
+                "": [{"typ": "slozka", "nazev": "scifi", "cesta": "scifi"}],
+                "scifi": [{"typ": "kniha", "nazev": "duna.epub", "cesta": "scifi/duna.epub"}],
+            }
+        )
+        c.akce()  # vstup do složky, kurzor zůstane na ".."
+        c.dalsi()  # na duna.epub
+        knihovna.uloz_posledni_stav(c.snimek())
+        assert knihovna.nacti_posledni_stav() == {
+            "typ": "menu",
+            "vyber": 1,
+            "adresar": "scifi",
+        }
+
+    def test_obnovi_menu_ve_slozce(self):
+        c = Ctecka(
+            {
+                "": [{"typ": "slozka", "nazev": "scifi", "cesta": "scifi"}],
+                "scifi": [{"typ": "kniha", "nazev": "duna.epub", "cesta": "scifi/duna.epub"}],
+            }
+        )
+        knihovna.uloz_posledni_stav(_snimek_menu(1, "scifi"))
+        assert knihovna.obnov_posledni_stav(c, None) is True
+        snimek = c.snimek()
+        assert snimek.adresar == "scifi"
+        assert snimek.polozky[snimek.vyber].cesta == "scifi/duna.epub"
 
     def test_chybejici_soubor_vraci_none(self):
         assert knihovna.nacti_posledni_stav() is None
@@ -145,16 +179,17 @@ class TestObnovPosledniStav:
 
 
 class _FakeSnimek:
-    def __init__(self, stav, kniha, cislo_stranky, vyber):
+    def __init__(self, stav, kniha, cislo_stranky, vyber, adresar=""):
         self.stav = stav
         self.kniha = kniha
         self.cislo_stranky = cislo_stranky
         self.vyber = vyber
+        self.adresar = adresar
 
 
 def _snimek_cteni(kniha, stranka):
     return _FakeSnimek(Stav.CTENI, kniha, stranka + 1, 0)
 
 
-def _snimek_menu(vyber):
-    return _FakeSnimek(Stav.MENU, None, 0, vyber)
+def _snimek_menu(vyber, adresar=""):
+    return _FakeSnimek(Stav.MENU, None, 0, vyber, adresar)
