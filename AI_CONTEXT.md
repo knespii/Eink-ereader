@@ -1,38 +1,52 @@
 # [PROJECT_OVERVIEW]
 
-DIY hardwarová **e-ink čtečka EPUB knih** běžící na **Raspberry Pi Zero W** s displejem **Waveshare 7.5" HD (epd7in5b_HD, dvoubarevný černá/červená, 880×528 px)**, ovládaná 3 fyzickými GPIO tlačítky. Repozitář obsahuje produkční běhový modul, jeho vývojovou variantu a webový **Flask simulátor** pro vývoj bez hardwaru.
+DIY hardwarová **e-ink čtečka EPUB knih** na **Raspberry Pi Zero W** s displejem **Waveshare 7.5" HD (`epd7in5b_HD`, tříbarevný černá/bílá/červená, fyzicky 880×528 px)**, ovládaná 3 fyzickými GPIO tlačítky. Součástí repozitáře je i **Flask simulátor**, který běží na **stejném kódu** jako produkce (ne jako zrcadlová kopie) a slouží k vývoji bez hardwaru.
+
+Kód i komentáře jsou česky, včetně názvů funkcí a proměnných.
 
 ---
 
 # [TECH_STACK]
 
-- **Jazyk:** Python 3.13 (venv v `.venv/`, interpreter `python3.13`)
-- **Runtime target:** Raspberry Pi Zero W (ARM), Linux
-- **Rendering / grafika:** `Pillow` 12.2.0 (`PIL.Image`, `ImageDraw`, `ImageFont`)
-- **Parsing EPUB:** `ebooklib` 0.20 (`epub.read_epub`, `ITEM_DOCUMENT`, `ITEM_IMAGE`)
-- **Parsing HTML:** `beautifulsoup4` (`bs4`), `soupsieve` 2.8.4, backend `lxml` 6.1.1
-- **GPIO (produkce):** `RPi.GPIO` — modul `hlavni_ctecka.py`
-- **GPIO (dev varianta):** `gpiozero` — modul `test_tlacitek_hl_ctecka.py`
-- **Web simulátor:** `Flask` 3.1.3 (+ tranzitivní `Jinja2` 3.1.6, `Werkzeug`, `itsdangerous` 2.2.0, `blinker` 1.9.0, `MarkupSafe`)
-- **Font:** DejaVu Sans TTF (`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` na Pi; `DejaVuSans.ttf` v CWD u simulátoru)
-- **Externí závislost (NENÍ v repu):** ovladač `waveshare_epd.epd7in5b_HD` — očekáván v `./waveshare_epd/`, jinak `sys.exit(1)`
-- **Deklarace závislostí:** `resources.txt` (`pillow`, `ebooklib`, `beautifulsoup4`, `gpiozero`, `Flask`) — bez verzí, **není** `requirements.txt`
+- **Jazyk:** Python (venv v `.venv/`; na Pi 3.11, na vývojovém desktopu 3.13)
+- **Runtime target:** Raspberry Pi Zero W (ARM), Raspberry Pi OS
+- **Rendering:** `Pillow` 12.2.0 (`PIL.Image`, `ImageDraw`, `ImageFont`)
+- **Parsing EPUB:** `EbookLib` 0.20 (`epub.read_epub`, `spine`, `ITEM_DOCUMENT`)
+- **Parsing HTML:** `beautifulsoup4` 4.14.3, `soupsieve` 2.8.4, `lxml` 6.1.1
+- **GPIO:** `gpiozero` 2.0.1 (backend `lgpio`, na Pi balík `python3-lgpio`)
+- **Web simulátor:** `Flask` 3.1.3
+- **Testy:** `pytest` 9.1.1, GPIO přes `gpiozero.pins.mock.MockFactory` (bez HW)
+- **Font:** DejaVu Sans TTF, `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` (jedna cesta pro produkci i simulátor; fallback `ImageFont.load_default()`)
+- **Deklarace závislostí:** `requirements.txt` s **pevnými verzemi** + `requirements-dev.txt` (pytest)
+- **Externí závislost (NENÍ v repu):** ovladač `waveshare_epd` — očekáván v `./waveshare_epd/`. Když chybí, program **nespadne**: `vytvor_displej()` sáhne po `DummyDriver` a běží naprázdno.
 
 ---
 
 # [ARCHITECTURE]
 
-- **Konečný automat (Finite State Machine):** globální `aktualni_stav` s hodnotami `"MENU"` a `"CTENI"`; veškerá logika tlačítek i vykreslování větví na tomto stavu.
-- **Event-driven + polling smyčka:** GPIO tlačítka registrují **callbacky na hraně FALLING**, které pouze mutují globální stav a nastaví `prekreslit_displej = True`; nekonečná `while` smyčka v `main()` na základě této vlajky provede vykreslení. Vykreslování NEbíhá v callbacku (e-ink refresh je pomalý).
-- **Separation of concerns (3 vrstvy):**
-  1. `zpracovani_epub.py` — extrakce obsahu (I/O + parsing).
-  2. `zpracovani_textu.py` — layout engine (word-wrap + stránkování), čistá funkce bez I/O.
-  3. `hlavni_ctecka.py` / `simulator.py` — orchestrace, stav, render na cílové zařízení.
-- **Sdílený stavový model:** `hlavni_ctecka.py` a `simulator.py` **duplikují** identické globální proměnné a pomocné funkce (`nacti_seznam_knih`, `nacti_pozici`, `uloz_pozici`, `otevri_knihu`) — simulátor je HW-agnostická zrcadlová implementace stejné logiky.
-- **Debounce dvouúrovňový:** HW debounce (`bouncetime=300` ms / `bounce_time=0.2` s) + SW throttle (`time.time() - posledni_stisk_cas < 2.0`) + guard `probiha_vykreslovani`.
-- **Cache-aside vzor:** naparsovaná kniha se serializuje `pickle` do `cache/<nazev>.epub.pkl`; při dalším otevření se čte z cache (obchází pomalý parsing na Pi Zero).
-- **Lazy import:** těžké moduly (`zpracovani_epub`, `zpracovani_textu`) se importují až uvnitř `otevri_knihu()` při cache-miss → rychlejší start.
-- **Micro-optimalizace paměti:** rotace obrazu `Image.ROTATE_90` (displej fyzicky na výšku) + předání dat do `epd.display()` jako `bytearray` (produkce) vs. `list` (dev varianta).
+Základní pravidlo: **stav, kreslení a hardware o sobě navzájem nevědí.** Díky tomu jede simulátor na produkčním kódu a všechno jde testovat bez Pi.
+
+| Modul | Odpovědnost | Nesmí znát |
+|---|---|---|
+| `stav.py` | konečný automat `MENU`/`CTENI`, třída `Ctecka` | PIL, GPIO, Flask, soubory |
+| `vykresleni.py` | `vykresli(snimek, fonty, nacti_obrazek)` → 2 bitmapy | hardware, rotaci, EPUB |
+| `displej.py` | rozhraní `Displej` + `WaveshareDriver` / `DummyDriver` | stav, obsah knih |
+| `knihovna.py` | jediné místo s I/O: knihy, pozice, cache, obrázky | stav, kreslení |
+| `zpracovani_epub.py` | EPUB → text a **cesty** k obrázkům | rozvržení, displej |
+| `zpracovani_textu.py` | rozvržení do stránek + JSON cache | displej, GPIO |
+| `hlavni_ctecka.py` | GPIO + hlavní smyčka | — |
+| `simulator.py` | Flask + skládání vrstev do RGB | — |
+
+**Klíčové vzory:**
+
+- **Jediný zdroj pravdy:** `Ctecka` drží veškerý stav a je **thread-safe** (`threading.Condition`). Produkce i simulátor na ni sahají identicky; liší se jen vstup (GPIO vs. HTTP) a výstup (e-ink vs. PNG). Ověřeno testem, že web ukazuje **bajtově totéž**, co jde na panel.
+- **Snímek místo živého stavu:** `Ctecka.snimek()` vrací zmrazený `@dataclass(frozen=True) Snimek`. Vykreslování tak nemůže přečíst stav rozpůlený stiskem tlačítka.
+- **Drahá práce mimo callbacky:** stránkování trvá na Pi Zero W ~16 s. Callbacky gpiozero smějí **jen sáhnout na stav** (měřeno: 0,02 ms). Otevření knihy jde přes **požadavek**: `akce()` ho zaeviduje → hlavní smyčka `vyzvedni_pozadavek()` → parsuje → `dodej_stranky()`. Mezitím svítí `nacita_se`.
+- **Ochrana proti ztracenému překreslení:** `cekej_na_prekresleni()` shazuje vlajku **před** renderem, atomicky pod zámkem. Stisk během ~10s zápisu na e-ink se tak neztratí.
+- **Koalescence zápisů:** rychlé listování se slije do **jednoho** zápisu `progress.json` (šetří SD kartu).
+- **Rotace patří driveru:** `vykresleni.py` kreslí 528×880 na výšku; otočení o 90° do 880×528 dělá `WaveshareDriver`, protože to je vlastnost železa, ne knihy.
+- **Lazy import ovladače:** `waveshare_epd` se importuje až v konstruktoru `WaveshareDriver` → zbytek jde spustit a testovat na desktopu.
+- **Hromadný SPI přenos:** viz [PERFORMANCE].
 
 ---
 
@@ -40,126 +54,216 @@ DIY hardwarová **e-ink čtečka EPUB knih** běžící na **Raspberry Pi Zero W
 
 ```
 ctecka/
-├── hlavni_ctecka.py              # PRODUKČNÍ vstupní bod; FSM + render loop + RPi.GPIO callbacky + cache
-├── test_tlacitek_hl_ctecka.py    # Vývojová varianta hlavní čtečky používající gpiozero (+ dlouhý stisk = exit)
-├── simulator.py                  # Flask web simulátor displeje (HTTP tlačítka, render do PNG) pro vývoj bez HW
-├── zpracovani_epub.py            # Parsing EPUB → lineární seznam bloků {"typ":"text"|"obrazek", "hodnota":...}
-├── zpracovani_textu.py           # Layout engine: word-wrap + stránkování bloků na render-ready stránky
-├── resources.txt                 # Seznam pip závislostí (bez verzí)
-├── progress.json                 # Perzistence pozice čtení: {"epuby/<kniha>.epub": <index_stranky>}
-├── dokumentace.md                # ZASTARALÝ kontext pro LLM (Gemini); popisuje staré API a špatné piny — viz DATA_FLOW pozn.
-├── .gitignore                    # Ignoruje .venv, __pycache__, /epuby/, *.epub, progress.json
-├── epuby/                        # Vstupní složka EPUB knih (git-ignored); zdroj pro seznam_knih
-│   ├── Treason.epub
-│   └── Alliances.epub
-├── cache/                        # (runtime, vytváří se) pickle cache naparsovaných knih *.pkl
-├── __pycache__/                  # Bytecode cache
-└── .venv/                        # Python 3.13 virtuální prostředí
+├── stav.py                  # FSM: třída Ctecka + Snimek + Stav (StrEnum). Bez PIL/GPIO/Flask.
+├── vykresleni.py            # vykresli(snimek, fonty, nacti_obrazek) -> (cerna, cervena) 528×880
+├── displej.py               # rozhraní Displej; WaveshareDriver (rotace + hromadné SPI) / DummyDriver
+├── knihovna.py              # jediné I/O: seznam knih, progress.json, posledni_stav.json, cache, obrázky
+├── zpracovani_epub.py       # EPUB -> [{"typ":"text","hodnota":str} | {"typ":"obrazek","hodnota":cesta_v_zipu}]
+├── zpracovani_textu.py      # word-wrap + stránkování + JSON cache s invalidačním hashem
+├── hlavni_ctecka.py         # produkční vstupní bod: gpiozero + hlavní smyčka
+├── simulator.py             # Flask simulátor na produkčním kódu (localhost:5000)
+├── ctecka.service           # systemd šablona (placeholdery __UZIVATEL__ / __ADRESAR__)
+├── install-sluzba.sh        # doplní placeholdery a nainstaluje autostart
+├── requirements.txt         # běhové závislosti s pevnými verzemi
+├── requirements-dev.txt     # + pytest
+├── pytest.ini               # testpaths = tests, pythonpath = . tests
+├── README.md                # dokumentace pro člověka
+├── AI_CONTEXT.md            # tento soubor
+├── tests/                   # 192 testů (pytest), bez hardwaru
+│   ├── conftest.py          # autouse fixtury chránící progress.json a cache uživatele
+│   ├── test_stav.py, test_vykresleni.py, test_displej.py, test_knihovna.py
+│   ├── test_zpracovani_epub.py, test_zpracovani_textu.py
+│   ├── test_hlavni_ctecka.py, test_simulator.py
+│   ├── test_rychly_prenos.py    # bajtová shoda hromadného SPI přenosu
+│   └── test_obnoveni.py         # navázání po zapnutí bez bliknutí
+├── epuby/                   # vstupní EPUB knihy (git-ignored)
+├── waveshare_epd/           # ovladač displeje (NENÍ v repu, instaluje se zvlášť)
+├── progress.json            # pozice v knihách (git-ignored)
+├── posledni_stav.json       # poslední zobrazený stav (git-ignored)
+└── .venv/
 ```
-
-**Poznámka:** Adresář `waveshare_epd/` (ovladač displeje) je vyžadován za běhu na Pi, ale v repozitáři chybí.
 
 ---
 
 # [CORE_COMPONENTS]
 
-## `hlavni_ctecka.py` (produkční runtime)
-- **Vstupní bod** aplikace na Pi (`if __name__ == "__main__": main()`).
-- **GPIO piny (BCM):** `PIN_DALSI = 21`, `PIN_PREDCHOZI = 26`, `PIN_AKCE = 19`; režim `GPIO.IN` s `pull_up_down=GPIO.PUD_UP`, detekce `GPIO.FALLING`, `bouncetime=300`.
-- **Callbacky:** `stisk_dalsi(channel)`, `stisk_predchozi(channel)`, `stisk_akce(channel)` — mutují stav, řízeny hodnotou `aktualni_stav`.
-- **Render loop v `main()`:** vytváří dvě 1-bit bitmapy `528×880` (`image_black`, `image_red`), kreslí menu/text/obrázek, rotuje o 90°, posílá přes `epd.init()` → `epd.display(bytearray, bytearray)` → `epd.sleep()`.
-- **Komunikace:** volá `zpracovani_epub.nacti_epub_obsah()` a `zpracovani_textu.zformatuj_a_rozdel()` (lazy import), čte/zapisuje `progress.json` a `cache/`.
+## `stav.py` — konečný automat
+- `Stav(StrEnum)`: `MENU` | `CTENI`. `Snimek` = frozen dataclass (stav, seznam_knih, vyber, kniha, stranka, cislo_stranky, pocet_stranek, nacita_se, chyba).
+- `Ctecka(seznam_knih=None, prekreslit_na_startu=True)`.
+- **Pro tlačítka (z cizích vláken):** `dalsi()`, `predchozi()`, `akce()`, `ukonci()`.
+- **Pro hlavní smyčku:** `snimek()`, `cekej_na_prekresleni(timeout)`, `spotrebuj_prekresleni()`, `vyzvedni_pozadavek()`, `dodej_stranky(nazev, stranky, pocatecni_stranka)`, `vyzvedni_pozici_k_ulozeni()`, `nastav_seznam_knih(seznam)`, vlastnost `konec`.
+- **Obnova po startu:** `obnov_cteni(nazev, stranky, stranka)`, `obnov_menu(vyber)` — nastaví stav **bez** vyžádání překreslení; `vyzadej_prekresleni()` když obnova neseděla.
+- Návrat do menu **zahazuje stránky** (paměť na 512 MB) a **ruší** rozpracované načítání — jinak by kniha za chvíli stejně naskočila.
 
-## `test_tlacitek_hl_ctecka.py` (dev varianta produkce)
-- Funkčně shodná s `hlavni_ctecka.py`, ale ovládání přes **`gpiozero.Button`** (`bounce_time=0.2`, `when_pressed`).
-- **Navíc:** `btn_akce` má `hold_time=2.0` + `when_held = stisk_akce_dlouhy` → **dlouhý stisk ukončí program** (`konec_programu = True`).
-- Data do `epd.display()` posílá jako `list(...)` (neoptimalizováno oproti `bytearray`).
-- Verbose `print()` logování stavů debounce.
+## `vykresleni.py` — kreslení
+- `nacti_fonty(cesta)` → `Fonty(text=32, info=20, titulek=40)`.
+- `vykresli(snimek, fonty, nacti_obrazek=None)` → `(cerna, cervena)`, obě `PIL.Image` mode `"1"`, 528×880, **neotočené**.
+- Rozměry se **odvozují**: `TEXT_SIRKA = SIRKA - 2*OKRAJ = 488`, `TEXT_VYSKA = LISTA_Y - OKRAJ = 820`, `LISTA_Y = 840`.
+- Řádkování bere z `zpracovani_textu.vyska_radku(fonty.text)` — **jeden zdroj pravdy** s layoutem (43 px pro DejaVu 32).
+- Menu roluje **po stránkách** po `POLOZEK_NA_STRANKU = 13`; lišta hlásí `Knihy 14–26 z 30`.
+- Obrázky nenačítá sám — dostane `nacti_obrazek(cesta_v_archivu)`. Bez něj kreslí zástupku.
 
-## `simulator.py` (Flask simulátor)
-- HW-nezávislá replika FSM pro vývoj v prohlížeči; renderuje do **RGB PNG** místo e-ink.
-- **Routy:**
-  - `GET /` → HTML stránka s `<img>` displejem a 3 tlačítky (JS `fetch` POST).
-  - `GET /screen` → generuje aktuální snímek stavu jako PNG (`send_file`, mimetype `image/png`).
-  - `POST /api/stisk/<tlacitko>` → `tlacitko ∈ {predchozi, akce, dalsi}`; ekvivalent HW callbacků.
-- Spouští `app.run(debug=True, host="0.0.0.0", port=5000)`.
-- **Odlišnost:** v menu zobrazuje název souboru **včetně** přípony (`kniha`), zatímco produkce ořezává `.epub` (`kniha[:-5]`).
+## `displej.py` — hardware
+- `Displej` (ABC): `zobraz(cerna, cervena)`, `vycisti()`, `vypni()`.
+- `WaveshareDriver`: rotace o 90°, `init()` → data → `sleep()`. Import `waveshare_epd` až v `__init__`.
+- `rychle_zobraz(epd, cfg, cerna_buf, cervena_buf)` / `rychle_vycisti(epd, cfg)` — hromadný SPI přenos (viz [PERFORMANCE]). Fallback na `epd.display()`, když `epdconfig` nemá `spi_writebyte2`.
+- Na `sys.path` se přidává i adresář `waveshare_epd/` — starší ovladač uvnitř dělá `import epdconfig` nerelativně.
+- `DummyDriver` jen loguje; `vytvor_displej()` vybírá podle dostupnosti ovladače.
 
-## `zpracovani_epub.py` (EPUB parser)
-- Funkce **`nacti_epub_obsah(cesta_k_souboru, max_sirka=880, max_vyska=488)`**.
-- Prochází `ITEM_DOCUMENT` položky, `BeautifulSoup(..., 'html.parser')`, iteruje `['p','div','img']` v pořadí výskytu.
-- Text → `{"typ": "text", "hodnota": str}`; obrázek → dohledá binární `ITEM_IMAGE` podle názvu souboru, `Image.thumbnail((max_sirka,max_vyska))`, `convert('1')` (1-bit), `{"typ": "obrazek", "hodnota": PIL.Image}`.
-- Volající předávají `max_sirka=488, max_vyska=820` (pozor: default v signatuře je opačný).
-- Chyba → vrací `[]`.
+## `knihovna.py` — všechno I/O
+- `nacti_seznam_knih()`, `nacti_pozice()`, `uloz_pozici(kniha, stranka)`, `nacti_stranky(nazev, fonty)`, `nacti_obrazek_knihy(nazev)`.
+- `obsluz(ctecka, fonty)` — vyřídí požadavek na načtení a zápis pozice. Volá ji hlavní smyčka i simulátor.
+- `uloz_posledni_stav(snimek)` / `nacti_posledni_stav()` / `obnov_posledni_stav(ctecka, fonty)`.
+- `_zapis_json_atomicky(cesta, data)` — tmp + `fsync` + `os.replace`.
+- Cesty se odvozují od `__file__`, **ne** od CWD (jinak by čtečka ze systemd nenašla knihy).
 
-## `zpracovani_textu.py` (layout engine)
-- Funkce **`zformatuj_a_rozdel(obsah, font, max_sirka_px, max_vyska_px, rozestup_radku=5)`** → `list[dict]` stránek.
-- Čistá funkce (žádné I/O). Word-wrap podle `font.getlength()`; **`word_cache`** memoizuje šířky slov (výkon na Pi Zero).
-- Výška řádku = `ascent + descent + rozestup_radku`; obrázek dostává **vlastní samostatnou stránku**; mezi bloky vkládá prázdný řádek.
-- Výstupní stránka: `{"typ": "text", "obsah": list[str]}` nebo `{"typ": "obrazek", "obsah": PIL.Image}`.
+## `zpracovani_epub.py` — parser
+- `nacti_epub_obsah(cesta_k_souboru)` → seznam `{"typ": "text"|"obrazek", "hodnota": ...}` v **pořadí čtení**.
+- Iteruje **`kniha.spine`**, ne `get_items()` (to vrací pořadí manifestu, které nemusí odpovídat kapitolám).
+- Text bere **jen z listových bloků** (`p`, `div` bez vnořených bloků) — jinak by `<div><p>` vydal odstavec dvakrát.
+- Text čistí přes `" ".join(el.get_text().split())` — zachová mezery mezi vnořenými tagy a nerozsekne slovo.
+- Obrázky se **nedekódují**: `hodnota` je cesta v ZIPu (např. `OEBPS/Images/cover.jpeg`). Kořen se bere z `META-INF/container.xml`.
+- `nacti_obrazek(cesta_k_epubu, cesta_v_archivu, max_sirka, max_vyska)` → `PIL.Image` mode `"1"`, volá se až před vykreslením.
+
+## `zpracovani_textu.py` — layout + cache
+- `vyska_radku(font, rozestup=5)` = `ascent + descent + rozestup`. **Volá i vykreslování.**
+- `zformatuj_a_rozdel(obsah, font, max_sirka_px, max_vyska_px)` → stránky `{"typ":"text","obsah":list[str]}` | `{"typ":"obrazek","obsah":cesta}`.
+- `klic_cache(...)`, `nacti_z_cache(klic)`, `uloz_do_cache(klic, stranky)`.
+- `VERZE_ALGORITMU = 2` — **zvyš při každé změně, která mění výsledné stránky**, včetně zásahu do `zpracovani_epub`.
+
+## `hlavni_ctecka.py` — produkce
+- Piny (BCM): `PIN_DALSI = 21`, `PIN_PREDCHOZI = 26`, `PIN_AKCE = 19`; `bounce_time = 0.1`, `hold_time = 2.0`.
+- Krátký stisk visí na **`when_released`** (s vlajkou `drzeno`) — jinak by dlouhý stisk nejdřív otevřel knihu.
+- `PERIODA_CISTENI = 0` (čištění vypnuté, viz [PERFORMANCE]).
+- Hlavní smyčka: `cekej_na_prekresleni(1.0)` → `zobraz()` → `knihovna.obsluz()` → v `MENU` obnova seznamu knih.
+
+## `simulator.py` — Flask
+- Routy: `GET /`, `GET /screen` (PNG), `POST /api/stisk/<dalsi|predchozi|akce>`.
+- Drží tutéž `Ctecka` a kreslí toutéž `vykresli()`; navíc jen skládá 1-bit vrstvy do RGB (`ImageChops.invert` jako maska).
+- Běží na `debug=False, host="127.0.0.1"` — dřívější `debug=True` + `0.0.0.0` byla otevřená Werkzeug konzole (RCE).
 
 ---
 
 # [DATA_FLOW]
 
-## Proces 1: Start aplikace (`main()`)
-1. Načtou se 3 fonty z `FONT_PATH` (fallback `ImageFont.load_default()` při `IOError`).
-2. `nacti_seznam_knih()` → naplní `seznam_knih` `.epub` soubory ze `slozka_knih = "epuby"` (řazeno, `sort()`).
-3. Inicializace displeje `epd = epd7in5b_HD.EPD()` a GPIO tlačítek s callbacky.
-4. Vstup do `while not konec_programu` smyčky; `prekreslit_displej = True` → první render menu.
+## Start
+1. `nacti_fonty()`.
+2. Když existuje `posledni_stav.json` → `Ctecka(..., prekreslit_na_startu=False)` + `obnov_posledni_stav()`. Panel drží obraz z minula, takže **nic nebliká**. Když obnova selže (smazaná kniha) → `vyzadej_prekresleni()`.
+3. Bez uloženého stavu → normální start v `MENU` s překreslením.
+4. `vytvor_displej()`, `pripoj_tlacitka()`, vstup do smyčky.
 
-## Proces 2: Stisk tlačítka → překreslení
-1. HW hrana FALLING → callback (`stisk_dalsi` / `stisk_predchozi` / `stisk_akce`).
-2. **Guard:** pokud `probiha_vykreslovani` NEBO `< 2.0 s` od `posledni_stisk_cas` → `return` (ignorováno).
-3. Podle `aktualni_stav`:
-   - `MENU` + DALŠÍ/PŘEDCHOZÍ → posun `vybrana_kniha_index` v mezích.
-   - `MENU` + AKCE → `otevri_knihu(seznam_knih[vybrana_kniha_index])`.
-   - `CTENI` + DALŠÍ/PŘEDCHOZÍ → posun `aktualni_stranka` + **`uloz_pozici()`**.
-   - `CTENI` + AKCE → `nacti_seznam_knih()`, `aktualni_stav = "MENU"`.
-4. `prekreslit_displej = True`.
-5. Smyčka detekuje vlajku → `probiha_vykreslovani = True` → render → rotace 90° → `epd.init()`/`display()`/`sleep()` → `probiha_vykreslovani = False`.
+## Stisk → překreslení
+1. Callback gpiozero (cizí vlákno) sáhne na `Ctecka` a probudí smyčku. **Nic nenačítá.**
+2. `cekej_na_prekresleni()` vrátí `True` a **zároveň shodí vlajku** (stisk během renderu se tak neztratí).
+3. `zobraz()` → `vykresli(snimek, ...)` → `obrazovka.zobraz()` → `uloz_posledni_stav(snimek)`.
+4. `knihovna.obsluz()` vyřídí případný požadavek na knihu a zápis pozice.
 
-## Proces 3: Otevření knihy (`otevri_knihu`)
-1. Sestaví `cache_soubor = cache/<nazev>.epub.pkl`.
-2. **Cache-hit:** `pickle.load()` → `kniha_stranky`.
-3. **Cache-miss:** lazy import → `nacti_epub_obsah()` → `zformatuj_a_rozdel(obsah, font_text, 488, 820)` → `pickle.dump()` do cache.
-4. `aktualni_stranka = nacti_pozici(aktualni_kniha)`; clamp na `len(kniha_stranky)-1`.
-5. `aktualni_stav = "CTENI"`, `prekreslit_displej = True`.
+## Otevření knihy
+1. `akce()` v `MENU` zaeviduje **požadavek** (stav zůstává `MENU`, `nacita_se = True`).
+2. Smyčka `vyzvedni_pozadavek()` → `nacti_stranky()` → cache hit (ihned) nebo parse + stránkování (~16 s).
+3. `dodej_stranky(nazev, stranky, nacti_pozice().get(nazev, 0))` → `CTENI` + překreslení.
 
-## Proces 4: Simulátor (bez HW)
-1. `POST /api/stisk/<tlacitko>` mutuje stav (stejná FSM logika jako HW).
-2. JS front-end po odpovědi znovu načte `GET /screen?t=<timestamp>` (cache-busting).
-3. `/screen` renderuje aktuální stav do PNG a vrací `send_file`.
-
-**Pozn. o `dokumentace.md`:** popisuje **zastaralé** API (`nacti_epub_text` bez obrázků, piny 16/20/21, jen 3 moduly, adresát „Gemini") a **neodpovídá** aktuálnímu kódu — nepoužívat jako zdroj pravdy. Aktuální piny jsou 21/26/19, EPUB parser zpracovává i obrázky.
+## Vypnutí a zapnutí
+1. Dlouhý stisk → `ukonci()` → smyčka končí, `obrazovka.vypni()`. Návrat 0, takže systemd nerestartuje.
+2. E-ink drží poslední obraz i bez napájení.
+3. Po zapnutí systemd spustí program, ten obnoví stav z `posledni_stav.json` **bez překreslení** a čeká na stisk.
 
 ---
 
 # [STATE_AND_STORAGE]
 
-## In-memory stav (globální proměnné)
-| Proměnná | Význam |
+## Stav v paměti
+Veškerý stav je **uvnitř instance `Ctecka`** pod zámkem — žádné globální proměnné. Ven jde jen přes `snimek()`.
+
+## Perzistence
+| Soubor | Obsah |
 |---|---|
-| `aktualni_stav` | FSM: `"MENU"` \| `"CTENI"` |
-| `seznam_knih` | `list[str]` názvů `.epub` ve složce `epuby` |
-| `vybrana_kniha_index` | index kurzoru v menu |
-| `aktualni_kniha` | cesta k otevřené knize (klíč do `progress.json`) |
-| `aktualni_stranka` | index aktuální stránky v `kniha_stranky` |
-| `kniha_stranky` | `list[dict]` render-ready stránek (text/obrázek) |
-| `prekreslit_displej` | vlajka: vyžádat překreslení v render loopu |
-| `probiha_vykreslovani` | zámek proti stisku během e-ink refreshe |
-| `posledni_stisk_cas` | timestamp posledního přijatého stisku (SW debounce 2.0 s) |
-| `konec_programu` | ukončovací vlajka (dlouhý stisk v dev variantě) |
+| `progress.json` | `{"<jméno souboru>.epub": <index stránky>}` — klíč je **jméno souboru**, ne cesta (nezávislé na CWD). Zápis atomický. |
+| `posledni_stav.json` | `{"typ":"cteni","kniha":...,"stranka":N}` nebo `{"typ":"menu","vyber":N}` — poslední **zobrazený** stav. |
+| `~/.cache/ctecka/<hash>.json` | Stránkování knihy. **Čistý JSON, ne pickle.** |
 
-## Perzistentní úložiště
-- **`progress.json`** (JSON, UTF-8, `indent=4`): mapa `{"<cesta_ke_knize>": <index_stranky>}`, např. `{"epuby/Alliances.epub": 280, "epuby/Treason.epub": 113}`. Zapisuje se při každém obrátění stránky (`uloz_pozici`), čte při otevření (`nacti_pozici`). Git-ignored (per-device).
-- **`cache/<nazev>.epub.pkl`** (Python `pickle`, binární): serializovaný `kniha_stranky`. Runtime-generovaný, obsahuje i PIL `Image` objekty obrázkových stránek. Cache-aside, bez invalidace/expirace (smazat ručně při změně layoutu/fontu).
+**Invalidační klíč cache** = SHA-256 (16 hex znaků) z: jména knihy + její velikosti + mtime, cesty k fontu, velikosti fontu, rozlišení, rozestupu řádků a `VERZE_ALGORITMU`. Změna čehokoli z toho cache zneplatní sama. Pickle se nepoužívá záměrně — vázal by cache na verzi Pillow a jeho načtení umí spustit cizí kód.
 
-## Zdrojová data
-- **`epuby/*.epub`**: read-only vstup, git-ignored, indexováno `os.listdir` + filtr `.endswith(".epub")`.
+## Rozlišení
+- Logická plocha (na výšku): **528×880**, textová oblast **488×820**, stavová lišta na `y = 840`.
+- Fyzický panel (na šířku): **880×528** — rotaci dělá driver.
+- Dvě 1-bitové vrstvy: černá + červená (červená se do panelu posílá **invertovaná**).
 
-## Rozlišení & render buffery
-- Logická plocha: `528×880 px` (na výšku); text area layout: `488×820 px`.
-- Produkce: dvě **1-bit** bitmapy (`image_black`, `image_red`) → rotace `ROTATE_90` → `bytearray` do dvoubarevného e-ink.
-- Simulátor: jedna **RGB** bitmapa `528×880` → PNG (červená lišta `(220,0,0)`).
-- **Žádná** relační DB ani externí cache (Redis apod.) — vše lokální souborový systém.
+---
+
+# [PERFORMANCE]
+
+Naměřeno na Pi Zero W:
+
+| Operace | Čas |
+|---|---|
+| Import modulů + vykreslení menu | 4,8 s |
+| `display()` původním ovladačem | ~99 s |
+| `display()` s hromadným přenosem | **~10 s** (budicí křivka panelu) |
+| `Clear()` | ~91 s |
+| Stránkování knihy (cache miss) | ~16 s |
+| Stránkování z cache | ihned |
+
+**Proč byl původní `display()` pomalý:** ovladač posílá obraz po jednom bajtu — 116 160 volání `send_data()`, každé třikrát cvakne GPIO (~460 tisíc gpiozero operací). Samotný přenos 116 KB na 4 MHz trvá 0,23 s; brzdila obsluha pinů, ne panel ani SPI.
+
+**Řešení:** `WaveshareDriver` reprodukuje tutéž příkazovou sekvenci (`0x4F`/`0xAF`, `0x24` černá, `0x26` invertovaná červená, `0x22`/`0xC7`, `0x20`), ale oba buffery pošle **jedním `writebytes2`** s CS drženým dole. **9 SPI transakcí místo 116 167**, do panelu jdou bajtově shodná data (ověřeno testem proti skutečnému ovladači).
+
+**Čištění panelu vypnuté** (`PERIODA_CISTENI = 0`): tříbarevný panel jede při každém `display()` plnou křivkou, obraz přepíše celý a duchy prakticky nenechává; `Clear()` by jen přidal 91 s.
+
+**Částečné překreslení není možné** — červený pigment vyžaduje plnou budicí křivku přes celý panel. To je vlastnost hardwaru, ne kódu.
+
+---
+
+# [TESTING]
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest          # 192 passed, 2 skipped
+```
+
+- **Bez hardwaru:** gpiozero jede na `MockFactory`, takže jde otestovat i dvouvteřinové držení tlačítka.
+- **Chrání data uživatele:** autouse fixtury v `conftest.py` odklánějí `progress.json`, `posledni_stav.json` i cache mimo repozitář.
+- **Bez knih v `epuby/`** se testy nad reálnou knihou přeskočí.
+- Klíčové vlastnosti pokryté testy: bajtová shoda simulátoru s panelem, bajtová shoda hromadného SPI přenosu, ztracené překreslení při souběhu, dlouhý stisk neotevře knihu, atomický zápis přežije výpadek napájení, obnova po startu nebliká.
+
+---
+
+# [DEPLOYMENT]
+
+```bash
+git clone https://github.com/knespii/Eink-ereader.git
+cd Eink-ereader
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# ovladač displeje (není na PyPI):
+git clone https://github.com/waveshareteam/e-Paper.git /tmp/e-Paper
+cp -r /tmp/e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd .
+sudo apt install -y python3-lgpio          # backend pro gpiozero
+sudo raspi-config nointeractive do_spi 0   # povolit SPI
+./install-sluzba.sh                        # autostart po zapnutí
+```
+
+Ovladač musí mít `epdconfig.spi_writebyte2` (hardwarové SPI). Starší verze se software SPI (soubory `sysfs_software_spi.so`) ho nemají a čtečka spadne zpět na pomalý režim. Kontrola:
+
+```bash
+.venv/bin/python -c "from waveshare_epd import epdconfig; print(hasattr(epdconfig, 'spi_writebyte2'))"
+```
+
+Správa služby: `sudo systemctl status ctecka`, `journalctl -u ctecka -f`, `sudo systemctl disable --now ctecka`.
+
+---
+
+# [KNOWN_LIMITATIONS]
+
+- **Obálky knih se nezobrazují** — titulní strany bývají `<svg><image xlink:href>`, parser bere jen `<img>`.
+- **Cache se neuklízí** — soubory pro staré fonty a verze algoritmu zůstávají ležet (~0,75 MB na knihu a konfiguraci).
+- **Dlouhá slova se nedělí** — slovo širší než řádek (např. URL) přeteče.
+- **Otočení stránky trvá ~10 s** — strop daný panelem, viz [PERFORMANCE].
+- **Obnova po zapnutí předpokládá**, že panel drží poslední obraz. Kdyby se smazal, displej se srovná při prvním stisku.
+
+---
+
+# [HISTORY_NOTE]
+
+Do commitu `4248dad` byl projekt postavený na **globálních proměnných** duplikovaných mezi `hlavni_ctecka.py` a `simulator.py`. Refaktor je rozdělil podle osy stav/kreslení/hardware a opravil mimo jiné: pořadí kapitol (manifest → spine), zdvojený text z `<div><p>`, slévání slov přes hranice tagů, rozestup řádků (zadrátovaných 37 px vs. 43 px z metrik fontu), ztracené překreslení při souběhu, parsování v GPIO callbacku, neatomický zápis pozic, klíče závislé na CWD a Werkzeug RCE v simulátoru.
+
+**Dřívější verze tohoto souboru popisovala věci, které v kódu nikdy nebyly** — `pickle` cache v `cache/*.pkl`, dvouúrovňový debounce s `probiha_vykreslovani` a `posledni_stisk_cas`, `RPi.GPIO` v produkci a dev variantu `test_tlacitek_hl_ctecka.py`. Nic z toho neexistuje; při práci podle tohoto dokumentu si klíčová tvrzení ověř v kódu.
