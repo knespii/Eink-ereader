@@ -38,6 +38,28 @@ class Stav(StrEnum):
     CTENI = "CTENI"
 
 
+class Typ(StrEnum):
+    """Druh položky v menu. ZPET je syntetická položka "..", na disku není."""
+
+    SLOZKA = "slozka"
+    KNIHA = "kniha"
+    ZPET = "zpet"
+
+
+@dataclass(frozen=True)
+class Polozka:
+    """Jeden řádek menu. `cesta` je relativní ke složce knih, u ZPET prázdná."""
+
+    typ: Typ
+    nazev: str
+    cesta: str = ""
+
+
+# Položka pro návrat z adresáře o úroveň výš. Je vždy první v pořadí, takže
+# otočení kodéru doleva z první knihy vede rovnou na ni.
+POLOZKA_ZPET = Polozka(typ=Typ.ZPET, nazev="..")
+
+
 @dataclass(frozen=True)
 class Snimek:
     """Konzistentní kopie stavu pro jedno vykreslení.
@@ -47,9 +69,12 @@ class Snimek:
     """
 
     stav: Stav
-    seznam_knih: tuple[str, ...]
+    seznam_knih: tuple[str, ...]  # jen názvy, pro zpětnou kompatibilitu vykreslení
+    polozky: tuple[Polozka, ...]  # obsah aktuálního adresáře včetně ".."
+    adresar: str  # relativní cesta otevřené složky, "" = kořen
     vyber: int
-    kniha: str | None
+    kniha: str | None  # relativní cesta otevřené knihy
+    kniha_nazev: str | None  # jen jméno souboru, k zobrazení
     stranka: Any | None  # data aktuální stránky, pro tuto třídu neprůhledná
     cislo_stranky: int
     pocet_stranek: int
@@ -68,7 +93,11 @@ class Ctecka:
         self._zamek = threading.Condition()
 
         self._stav = Stav.MENU
-        self._seznam_knih: list[str] = []
+        # Celá knihovna: {"": [položky kořene], "slozka": [položky složky]}.
+        # Ctecka nesmí sahat na disk, takže strom dodává hlavní smyčka a
+        # navigace ve složkách se pak obejde bez I/O.
+        self._strom: dict[str, tuple[Polozka, ...]] = {"": ()}
+        self._adresar = ""  # "" = kořen
         self._vyber = 0
 
         self._kniha: str | None = None
@@ -99,11 +128,15 @@ class Ctecka:
             if self._stav is Stav.CTENI and 0 <= self._stranka < len(self._stranky):
                 stranka = self._stranky[self._stranka]
 
+            polozky = self._pohled()
             return Snimek(
                 stav=self._stav,
-                seznam_knih=tuple(self._seznam_knih),
+                seznam_knih=tuple(p.nazev for p in polozky),
+                polozky=polozky,
+                adresar=self._adresar,
                 vyber=self._vyber,
                 kniha=self._kniha,
+                kniha_nazev=self._kniha.rpartition("/")[2] if self._kniha else None,
                 stranka=stranka,
                 cislo_stranky=self._stranka + 1,
                 pocet_stranek=len(self._stranky),
@@ -142,31 +175,81 @@ class Ctecka:
 
     # --- KNIHOVNA ---
 
-    def nastav_seznam_knih(self, seznam):
-        """Nahradí seznam knih tím, co našla hlavní smyčka ve složce.
+    def nastav_seznam_knih(self, strom):
+        """Nahradí knihovnu tím, co našla hlavní smyčka na disku.
 
-        Výběr se drží na téže knize, i když se seznam kolem ní změnil.
-        Vrací True, pokud se seznam skutečně změnil — když ne, nepřekresluje
+        `strom` je buď {adresar: [položky]} z knihovna.nacti_strom(), nebo
+        plochý seznam knih — ten se bere jako obsah kořene, aby staré volání
+        a testy bez složek fungovaly dál.
+
+        Výběr se drží na téže položce, i když se seznam kolem ní změnil.
+        Vrací True, pokud se knihovna skutečně změnila — když ne, nepřekresluje
         se, protože refresh e-inku trvá sekundy a nemá smysl na tentýž obsah.
         """
-        novy = sorted(seznam)
+        novy = self._normalizuj_strom(strom)
         with self._zamek:
-            if novy == self._seznam_knih:
+            if novy == self._strom:
                 return False
 
-            drzena = (
-                self._seznam_knih[self._vyber]
-                if 0 <= self._vyber < len(self._seznam_knih)
-                else None
-            )
-            self._seznam_knih = novy
-            if drzena in novy:
-                self._vyber = novy.index(drzena)
+            drzena = self._pohled()
+            drzena = drzena[self._vyber].cesta if 0 <= self._vyber < len(drzena) else None
+
+            self._strom = novy
+            # Otevřená složka mohla zmizet — pak se vracíme do kořene, jinak by
+            # menu ukazovalo prázdno bez cesty ven.
+            if self._adresar not in self._strom:
+                self._adresar = ""
+
+            polozky = self._pohled()
+            cesty = [p.cesta for p in polozky]
+            if drzena and drzena in cesty:
+                self._vyber = cesty.index(drzena)
             else:
-                self._vyber = min(self._vyber, max(0, len(novy) - 1))
+                self._vyber = min(self._vyber, max(0, len(polozky) - 1))
 
             self._zadej_prekresleni()
             return True
+
+    @staticmethod
+    def _normalizuj_strom(strom):
+        """Sjednotí vstup na {adresar: tuple[Polozka]} se stabilním pořadím.
+
+        Přijímá Polozka i prosté dicty z knihovny — ta o téhle třídě nemá vědět,
+        takže si položky předávají jako data, ne jako typy.
+        """
+        if not isinstance(strom, dict):
+            strom = {"": strom}
+
+        vysledek = {}
+        for adresar, polozky in strom.items():
+            prevedene = []
+            for p in polozky:
+                if isinstance(p, Polozka):
+                    prevedene.append(p)
+                elif isinstance(p, dict):
+                    prevedene.append(
+                        Polozka(
+                            typ=Typ(p["typ"]),
+                            nazev=p["nazev"],
+                            cesta=p.get("cesta", p["nazev"]),
+                        )
+                    )
+                else:  # holý řetězec = kniha v kořeni (staré volání)
+                    prevedene.append(Polozka(typ=Typ.KNIHA, nazev=p, cesta=p))
+            # Složky napřed, pak knihy — na jednořádkovém OLEDu se jinak
+            # uživatel k podsložkám doroluje až někde uprostřed abecedy.
+            prevedene.sort(key=lambda p: (p.typ is not Typ.SLOZKA, p.nazev))
+            vysledek[adresar] = tuple(prevedene)
+
+        vysledek.setdefault("", ())
+        return vysledek
+
+    def _pohled(self):
+        """Obsah aktuálního adresáře včetně ".." — volat jen se zámkem."""
+        polozky = self._strom.get(self._adresar, ())
+        if self._adresar:
+            return (POLOZKA_ZPET,) + polozky
+        return polozky
 
     # --- OBNOVENÍ POSLEDNÍHO STAVU PO STARTU ---
     # Obnova záměrně nevyžaduje překreslení: panel drží obraz z minula, takže
@@ -183,11 +266,18 @@ class Ctecka:
             self._stav = Stav.CTENI
             return True
 
-    def obnov_menu(self, vyber):
-        """Vrátí kurzor v menu na danou položku, bez vyžádání překreslení."""
+    def obnov_menu(self, vyber, adresar=""):
+        """Vrátí kurzor v menu na danou položku, bez vyžádání překreslení.
+
+        Neznámý adresář se tiše ignoruje (složka mezitím zmizela) — zůstane se
+        v kořeni, protože prázdné menu bez cesty ven je horší než špatný výběr.
+        """
         with self._zamek:
-            if self._seznam_knih:
-                self._vyber = max(0, min(vyber, len(self._seznam_knih) - 1))
+            if adresar in self._strom:
+                self._adresar = adresar
+            polozky = self._pohled()
+            if polozky:
+                self._vyber = max(0, min(vyber, len(polozky) - 1))
 
     def vyzadej_prekresleni(self):
         """Vynutí překreslení. Používá se, když obnova po startu neseděla a
@@ -206,19 +296,51 @@ class Ctecka:
         self._posun(-1)
 
     def akce(self):
-        """Krátký stisk: v menu otevře knihu, při čtení se vrátí do menu."""
+        """Krátký stisk (nebo stisk kodéru).
+
+        V menu podle druhu položky: vstoupí do složky, vrátí se přes "..", nebo
+        otevře knihu. Při čtení se vrací do menu.
+
+        Vstup do složky i návrat jsou čistě práce s pamětí, takže je bezpečné
+        je vyřídit rovnou tady, v cizím vlákně. Načtení knihy zůstává jako
+        požadavek pro hlavní smyčku — parsování trvá na Pi Zero W ~16 s.
+        """
         with self._zamek:
             if self._konec or self._nacita_se():
                 return
 
-            if self._stav is Stav.MENU:
-                if not self._seznam_knih:
-                    return
-                self._pozadavek = self._seznam_knih[self._vyber]
-                self._chyba = None
+            if self._stav is not Stav.MENU:
+                self._zpet_do_menu()
+                return
+
+            polozky = self._pohled()
+            if not (0 <= self._vyber < len(polozky)):
+                return
+            polozka = polozky[self._vyber]
+
+            if polozka.typ is Typ.ZPET:
+                # Kurzor se v kořeni postaví na složku, ze které jsme vyšli —
+                # bez toho by uživatel po opuštění složky skončil na začátku
+                # seznamu a hledal, kde vlastně byl.
+                opustena = self._adresar
+                self._adresar = ""
+                self._vyber = self._index_cesty(opustena)
+                self._zadej_prekresleni()
+            elif polozka.typ is Typ.SLOZKA:
+                self._adresar = polozka.cesta
+                self._vyber = 0
                 self._zadej_prekresleni()
             else:
-                self._zpet_do_menu()
+                self._pozadavek = polozka.cesta
+                self._chyba = None
+                self._zadej_prekresleni()
+
+    def _index_cesty(self, cesta):
+        """Pozice položky s danou cestou v aktuálním pohledu, jinak 0."""
+        for i, p in enumerate(self._pohled()):
+            if p.cesta == cesta:
+                return i
+        return 0
 
     def zpet_do_menu(self):
         with self._zamek:
@@ -290,7 +412,7 @@ class Ctecka:
 
             if self._stav is Stav.MENU:
                 novy = self._vyber + smer
-                if 0 <= novy < len(self._seznam_knih):
+                if 0 <= novy < len(self._pohled()):
                     self._vyber = novy
                     self._zadej_prekresleni()
             else:

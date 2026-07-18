@@ -41,9 +41,71 @@ def _zapis_json_atomicky(cesta, data):
         logging.error("Zápis do %s selhal: %s", cesta, e)
 
 
-def nacti_seznam_knih():
+def _bezpecna_cesta(relativni):
+    """Složí absolutní cestu z relativní a ověří, že nevede ven ze SLOZKA_KNIH.
+
+    Názvy sice pocházejí z vlastního výpisu adresáře, ale relativní cesta se
+    ukládá do progress.json a posledni_stav.json — soubor upravený rukou (nebo
+    poškozený) by jinak přes ".." otevřel cokoli na disku.
+    """
+    cesta = os.path.normpath(os.path.join(SLOZKA_KNIH, relativni))
+    if os.path.commonpath([SLOZKA_KNIH, cesta]) != SLOZKA_KNIH:
+        raise ValueError(f"Cesta {relativni!r} vede mimo knihovnu.")
+    return cesta
+
+
+def _polozky_adresare(adresar):
+    """Obsah jednoho adresáře jako [{"typ", "nazev", "cesta"}, ...].
+
+    `adresar` je relativní cesta uvnitř SLOZKA_KNIH ("" = kořen). Podadresáře
+    hlásí jen kořen — zanořování je záměrně jen na jednu úroveň, takže složka
+    ve složce se ignoruje (viz [PROJECT_UPDATE_OLED], bod 4).
+    """
+    absolutni = _bezpecna_cesta(adresar)
+    polozky = []
+    try:
+        jmena = os.listdir(absolutni)
+    except OSError as e:
+        logging.error("Adresář %s nejde přečíst: %s", absolutni or SLOZKA_KNIH, e)
+        return polozky
+
+    for jmeno in jmena:
+        relativni = f"{adresar}/{jmeno}" if adresar else jmeno
+        if jmeno.endswith(".epub") and os.path.isfile(os.path.join(absolutni, jmeno)):
+            polozky.append({"typ": "kniha", "nazev": jmeno, "cesta": relativni})
+        elif not adresar and os.path.isdir(os.path.join(absolutni, jmeno)):
+            polozky.append({"typ": "slozka", "nazev": jmeno, "cesta": relativni})
+    return polozky
+
+
+def nacti_strom():
+    """Celá knihovna naráz: {"": [položky kořene], "slozka": [položky složky]}.
+
+    Ctecka nesmí sahat na disk, takže dostane rovnou celý strom a naviguje v
+    něm sama. Při jedné úrovni zanoření je to pár desítek položek, takže se to
+    vyplatí víc než dotazovat se na obsah složky až při vstupu do ní — vstup do
+    složky pak nečeká na I/O a jde vyřídit rovnou v obsluze encoderu.
+    """
     os.makedirs(SLOZKA_KNIH, exist_ok=True)
-    return [f for f in os.listdir(SLOZKA_KNIH) if f.endswith(".epub")]
+    strom = {"": _polozky_adresare("")}
+    for polozka in strom[""]:
+        if polozka["typ"] == "slozka":
+            strom[polozka["cesta"]] = _polozky_adresare(polozka["cesta"])
+    return strom
+
+
+def nacti_seznam_knih():
+    """Ploché relativní cesty všech knih — kořen i složky.
+
+    Slouží k ověření, že kniha z posledni_stav.json pořád existuje. Pro menu
+    použij nacti_strom(), ten nese i složky.
+    """
+    return [
+        polozka["cesta"]
+        for polozky in nacti_strom().values()
+        for polozka in polozky
+        if polozka["typ"] == "kniha"
+    ]
 
 
 def nacti_pozice():
@@ -58,7 +120,11 @@ def nacti_pozice():
 
 
 def uloz_pozici(kniha, stranka):
-    """Zapíše pozici atomicky. Klíčem je jméno souboru, ne cesta.
+    """Zapíše pozici atomicky. Klíčem je cesta relativní ke složce knih.
+
+    Dřív stačilo jméno souboru; se složkami by se dvě stejně pojmenované knihy
+    v různých složkách přepisovaly navzájem. Cesta je pořád relativní, takže
+    zůstává nezávislá na pracovním adresáři.
 
     Zapisuje se stranou a přejmenovává: čtečka se vypíná odpojením napájení a
     zápis přímo do progress.json by při smůle nechal useknutý JSON, čímž by se
@@ -70,8 +136,11 @@ def uloz_pozici(kniha, stranka):
 
 
 def nacti_stranky(nazev, fonty):
-    """Vrátí stránkování knihy — z cache, nebo ho spočítá a uloží."""
-    cesta = os.path.join(SLOZKA_KNIH, nazev)
+    """Vrátí stránkování knihy — z cache, nebo ho spočítá a uloží.
+
+    `nazev` je cesta relativní ke složce knih ("kniha.epub" i "slozka/kniha.epub").
+    """
+    cesta = _bezpecna_cesta(nazev)
     klic = zpracovani_textu.klic_cache(
         cesta, fonty.text, vykresleni.TEXT_SIRKA, vykresleni.TEXT_VYSKA
     )
@@ -99,7 +168,7 @@ def nacti_obrazek_knihy(nazev):
     if not nazev:
         return None
 
-    cesta = os.path.join(SLOZKA_KNIH, nazev)
+    cesta = _bezpecna_cesta(nazev)
 
     def nacti(v_archivu):
         return zpracovani_epub.nacti_obrazek(
@@ -139,7 +208,9 @@ def uloz_posledni_stav(snimek):
     if snimek.stav is Stav.CTENI and snimek.kniha:
         stav = {"typ": "cteni", "kniha": snimek.kniha, "stranka": snimek.cislo_stranky - 1}
     else:
-        stav = {"typ": "menu", "vyber": snimek.vyber}
+        # Adresář se ukládá taky, jinak by se čtečka po zapnutí probrala v
+        # kořeni, i když uživatel usnul uvnitř složky.
+        stav = {"typ": "menu", "vyber": snimek.vyber, "adresar": snimek.adresar}
     _zapis_json_atomicky(SOUBOR_STAVU, stav)
 
 
@@ -174,7 +245,7 @@ def obnov_posledni_stav(ctecka, fonty):
         return False  # kniha zmizela — panel drží stránku, kterou už neotevřeme
 
     if stav.get("typ") == "menu":
-        ctecka.obnov_menu(stav.get("vyber", 0))
+        ctecka.obnov_menu(stav.get("vyber", 0), stav.get("adresar", ""))
         return True
 
     return False
