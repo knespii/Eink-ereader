@@ -24,6 +24,12 @@ progress.json
 posledni_stav.json
 
 # =========================
+# Lokální pracovní poznámky
+# =========================
+# Podklady k rozpracovaným rozšířením, nepatří do repozitáře
+project_oled_context.md
+
+# =========================
 # Systémové soubory
 # =========================
 .DS_Store
