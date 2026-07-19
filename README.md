@@ -1,7 +1,8 @@
 # E-ink čtečka EPUB
 
 Čtečka knih na Raspberry Pi Zero W s displejem Waveshare 7.5" HD (tříbarevný,
-`epd7in5b_HD`). Ovládá se třemi tlačítky. Python 3.13.
+`epd7in5b_HD`). Ovládá se rotačním kodérem a dvojicí tlačítek na listování.
+Python 3.13.
 
 Panel je fyzicky na šířku (880×528), ale čte se na výšku — kreslí se tedy do
 528×880 a otočení řeší až ovladač displeje.
@@ -135,9 +136,10 @@ journalctl -u ctecka -f           # živý log
 sudo systemctl disable --now ctecka   # zrušit autostart
 ```
 
-Dlouhý stisk čtečku ukončí čistě (návrat 0), takže se nerestartuje a zůstane
-vypnutá do dalšího zapnutí Pi. Po pádu (nenulový návrat) služba naopak startuje
-znovu.
+Čtečka nemá tlačítko na vypnutí — služba běží pořád a vypíná se odpojením
+napájení. E-ink drží obraz i bez proudu, takže se tím nic neztratí; jediné, oč
+přijdeš, je uspání panelu přes `epd.sleep()`. Po pádu (nenulový návrat) služba
+startuje znovu.
 
 ### Navázání tam, kde jsi skončil
 
@@ -165,7 +167,7 @@ sudo usermod -aG gpio,spi "$USER"
 ```
 
 Testy nepotřebují hardware — gpiozero jede na mock pinech, takže se dá
-otestovat i dvouvteřinové držení tlačítka. Skutečný `progress.json` ani cache
+otestovat i vteřinové držení tlačítka v kodéru. Skutečný `progress.json` ani cache
 se přitom nedotknou (hlídají to autouse fixtury v `tests/conftest.py`).
 Testy nad reálnou knihou se bez `epuby/` přeskočí.
 

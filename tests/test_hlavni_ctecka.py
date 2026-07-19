@@ -39,6 +39,9 @@ def tlacitka_a_ctecka():
 
 
 class TestTlacitka:
+    """Z původní trojice zbyly dvě: listování. Vstup do menu a zpátky přešel
+    na tlačítko v kodéru, protože třetí tlačítko z hardwaru zmizelo."""
+
     def test_dalsi_posune_vyber(self, tlacitka_a_ctecka, stisk):
         c, _ = tlacitka_a_ctecka
         stisk(h.PIN_DALSI)
@@ -51,83 +54,13 @@ class TestTlacitka:
         stisk(h.PIN_PREDCHOZI)
         assert c.snimek().vyber == 0
 
-    def test_akce_jen_zada_pozadavek(self, tlacitka_a_ctecka, stisk):
-        c, _ = tlacitka_a_ctecka
-        stisk(h.PIN_AKCE)
-        assert c.snimek().stav is Stav.MENU  # callback nic nenačetl
-        assert c.snimek().nacita_se is True
-        assert c.vyzvedni_pozadavek() == "Alliances.epub"
+    def test_jsou_jen_dve(self, tlacitka_a_ctecka):
+        """Odstraněné tlačítko se nesmí vrátit zadními vrátky — každý další
+        Button by na chybějícím pinu jen visel a mátl."""
+        _, tlacitka = tlacitka_a_ctecka
+        assert len(tlacitka) == 2
+        assert not hasattr(h, "PIN_AKCE")
 
-    def test_callback_je_okamzity(self, tlacitka_a_ctecka, stisk):
-        """Parsování trvá stovky ms; callback, který ho spouští, by se neschoval.
-
-        Měřit jméno vlákna nejde — mock piny volají callback synchronně
-        z volajícího vlákna, na reálném HW je to vlákno gpiozero.
-        """
-        c, _ = tlacitka_a_ctecka
-        trvani = []
-        puvodni = c.akce
-
-        def sledovana():
-            t0 = time.time()
-            puvodni()
-            trvani.append(time.time() - t0)
-
-        c.akce = sledovana  # na_uvolneni() volá ctecka.akce() dynamicky
-        stisk(h.PIN_AKCE)
-        assert trvani[0] < 0.01
-
-
-class TestDlouhyStisk:
-    """when_pressed přijde okamžitě, takže krátký stisk visí na uvolnění."""
-
-    def test_dlouhy_stisk_ukonci(self, pin):
-        c = Ctecka(["Alliances.epub"])
-        tlacitka = h.pripoj_tlacitka(c)
-        try:
-            pin(h.PIN_AKCE).drive_low()
-            time.sleep(2.4)  # přes hold_time=2.0
-            pin(h.PIN_AKCE).drive_high()
-            time.sleep(0.2)
-            assert c.konec is True
-        finally:
-            for t in tlacitka:
-                t.close()
-
-    def test_dlouhy_stisk_neotevre_knihu(self, pin):
-        """Jinak by vypnutí čtečky pokaždé spustilo stránkování."""
-        c = Ctecka(["Alliances.epub"])
-        tlacitka = h.pripoj_tlacitka(c)
-        try:
-            pin(h.PIN_AKCE).drive_low()
-            time.sleep(2.4)
-            pin(h.PIN_AKCE).drive_high()
-            time.sleep(0.2)
-            assert c.vyzvedni_pozadavek() is None
-        finally:
-            for t in tlacitka:
-                t.close()
-
-    def test_kratky_stisk_po_dlouhem_zase_funguje(self, pin, stisk):
-        c = Ctecka(["Alliances.epub"])
-        tlacitka = h.pripoj_tlacitka(c)
-        try:
-            pin(h.PIN_AKCE).drive_low()
-            time.sleep(2.4)
-            pin(h.PIN_AKCE).drive_high()
-            time.sleep(0.2)
-        finally:
-            for t in tlacitka:
-                t.close()
-
-        c2 = Ctecka(["Alliances.epub"])
-        tlacitka2 = h.pripoj_tlacitka(c2)
-        try:
-            stisk(h.PIN_AKCE)
-            assert c2.vyzvedni_pozadavek() == "Alliances.epub"
-        finally:
-            for t in tlacitka2:
-                t.close()
 
 
 def test_stisk_behem_renderu_se_neztrati(tlacitka_a_ctecka, stisk):
@@ -253,7 +186,29 @@ class TestEnkoderVMenu:
         c, pin = enkoder_a_ctecka
         krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # na Alliances
         stisk(h.PIN_ENKODER_SW)
+        assert c.snimek().stav is Stav.MENU  # callback nic nenačetl
+        assert c.snimek().nacita_se is True
         assert c.vyzvedni_pozadavek() == "Alliances.epub"
+
+    def test_callback_je_okamzity(self, enkoder_a_ctecka, stisk):
+        """Parsování trvá stovky ms; callback, který ho spouští, by se neschoval.
+
+        Měřit jméno vlákna nejde — mock piny volají callback synchronně
+        z volajícího vlákna, na reálném HW je to vlákno gpiozero.
+        """
+        c, pin = enkoder_a_ctecka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        trvani = []
+        puvodni = c.akce
+
+        def sledovana():
+            t0 = time.time()
+            puvodni()
+            trvani.append(time.time() - t0)
+
+        c.akce = sledovana  # na_uvolneni() volá ctecka.akce() dynamicky
+        stisk(h.PIN_ENKODER_SW)
+        assert trvani[0] < 0.01
 
 
 class TestEnkoderPriCteni:
@@ -509,27 +464,12 @@ class TestRozvetveniVystupu:
         assert pockej(lambda: "eink" in zaznam)
 
         zaznam.clear()
-        stisk(h.PIN_AKCE)  # krátký stisk = zpět do menu
-
-        assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
-        time.sleep(0.4)
-        assert "eink" not in zaznam, "návrat do menu zbytečně překreslil panel"
-
-    def test_stisk_enkoderu_pri_cteni_otevre_menu_bez_einku(
-        self, bezici_smycka, pin, stisk
-    ):
-        ctecka, zaznam = bezici_smycka
-        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
-        stisk(h.PIN_ENKODER_SW)
-        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
-        assert pockej(lambda: "eink" in zaznam)
-
-        zaznam.clear()
-        stisk(h.PIN_ENKODER_SW)
+        stisk(h.PIN_ENKODER_SW)  # krátký stisk kodéru = zpět do menu
 
         assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
         assert pockej(lambda: "oled" in zaznam)
-        assert "eink" not in zaznam
+        time.sleep(0.4)
+        assert "eink" not in zaznam, "návrat do menu zbytečně překreslil panel"
 
     def test_utek_z_menu_prekresli_jen_oled(self, bezici_smycka, pin, stisk):
         """Jádro dlouhého stisku: text na panelu je pořád ten správný, takže

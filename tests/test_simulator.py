@@ -143,10 +143,12 @@ class TestShodaSDisplejem:
         import os
 
         sekvence = ["dalsi", "akce", "dalsi", "dalsi", "predchozi"]
+        # "akce" už nemá vlastní tlačítko — na hardwaru ji dělá krátký stisk
+        # tlačítka v kodéru. Listování zůstalo na dvojici u e-inku.
         piny = {
             "dalsi": hlavni_ctecka.PIN_DALSI,
             "predchozi": hlavni_ctecka.PIN_PREDCHOZI,
-            "akce": hlavni_ctecka.PIN_AKCE,
+            "akce": hlavni_ctecka.PIN_ENKODER_SW,
         }
 
         def vynuluj_pozice():
@@ -165,14 +167,16 @@ class TestShodaSDisplejem:
         # --- cesta B: hardware ---
         vynuluj_pozice()
         c_hw = Ctecka(knihovna.nacti_seznam_knih())
-        tlacitka = hlavni_ctecka.pripoj_tlacitka(c_hw)
+        ovladace = hlavni_ctecka.pripoj_tlacitka(c_hw) + hlavni_ctecka.pripoj_enkoder(
+            c_hw
+        )
         try:
             for krok in sekvence:
                 stisk(piny[krok])
                 knihovna.obsluz(c_hw, fonty)  # to, co dělá hlavní smyčka
         finally:
-            for t in tlacitka:
-                t.close()
+            for o in ovladace:
+                o.close()
 
         assert c_web.snimek() == c_hw.snimek()
 

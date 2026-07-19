@@ -13,8 +13,12 @@ Displeje jsou dva a každý slouží jinému stavu:
     MENU   → OLED 128×32 přes I2C, ovládá se rotačním kodérem. Překreslení
              trvá jednotky milisekund, takže reaguje na každé cvaknutí.
              E-ink se v menu nechává být.
-    CTENI  → e-ink přes SPI, ovládá se původními tlačítky. Jedno překreslení
-             stojí ~10 s, takže se dělá jen při otočení stránky.
+    CTENI  → e-ink přes SPI, stránky otáčí dvojice tlačítek. Jedno překreslení
+             stojí ~29 s, takže se dělá jen při otočení stránky.
+
+Mezi stavy se přechází tlačítkem v kodéru: krátkým stiskem tam, dlouhým zpátky.
+Je to jediné tlačítko čtečky a obsluhuje obojí, takže hlídat stav musí ono, ne
+volající.
 
 Vykreslují se pořád ze stejného Snimku, takže se nemůžou rozejít. Kreslení
 samotné je v oled_ui.py a vykresleni.py — tady je jen smyčka.
@@ -31,22 +35,22 @@ import oled_ui
 import vykresleni
 from stav import Ctecka, Stav
 
-# Tlačítka u e-inku: listování v knize a návrat do menu.
+# Tlačítka u e-inku: už jen listování v knize. Třetí tlačítko (přechod do menu
+# a zpět, dlouhým stiskem vypnutí) bylo z hardwaru odstraněné — obojí dělá
+# tlačítko v kodéru. S ním odešla i jediná cesta, jak čtečku ukončit z GPIO:
+# služba běží pořád a vypíná se odpojením napájení. E-ink drží obraz i bez
+# proudu, takže se tím nic neztratí; jen se panel neuspí přes epd.sleep().
 PIN_DALSI = 21
 PIN_PREDCHOZI = 26
-PIN_AKCE = 19
 
-# Rotační kodér u OLEDu: navigace v knihovně.
+# Rotační kodér u OLEDu: navigace v knihovně + jediné tlačítko čtečky.
 PIN_ENKODER_CLK = 5
 PIN_ENKODER_DT = 6
 PIN_ENKODER_SW = 13
 
 DOBA_ZAKMITU = 0.1
-DOBA_DRZENI = 2.0
 
 # Držení tlačítka v kodéru, po kterém se bere jako dlouhý stisk (útěk do knihy).
-# Kratší než DOBA_DRZENI u e-inkového tlačítka schválně: tohle se používá běžně,
-# kdežto dvě sekundy u PIN_AKCE chrání před nechtěným vypnutím čtečky.
 DOBA_DRZENI_ENKODER = 1.0
 
 # Jak dlouho smyčka čeká na probuzení, když se nic neděje. V menu krátce, aby
@@ -216,42 +220,23 @@ class VystupOled:
 
 
 def pripoj_tlacitka(ctecka):
-    """Naváže tlačítka na stav. Volající si vrácený seznam musí podržet —
-    zapomenuté Button objekty sebere garbage collector a tlačítka umlknou.
+    """Naváže listovací tlačítka na stav. Volající si vrácený seznam musí
+    podržet — zapomenuté Button objekty sebere garbage collector a tlačítka
+    umlknou.
+
+    Zbyla z nich jen dvojice pro otáčení stránek. Do menu a zpátky se chodí
+    tlačítkem v kodéru (viz pripoj_enkoder), takže tyhle dvě nemají žádnou
+    dlouhostiskovou větev.
 
     Callbacky jen mění stav a budí smyčku. Žádný z nich nic nenačítá.
     """
     dalsi = Button(PIN_DALSI, bounce_time=DOBA_ZAKMITU)
     predchozi = Button(PIN_PREDCHOZI, bounce_time=DOBA_ZAKMITU)
-    akce = Button(PIN_AKCE, bounce_time=DOBA_ZAKMITU, hold_time=DOBA_DRZENI)
 
     dalsi.when_pressed = ctecka.dalsi
     predchozi.when_pressed = ctecka.predchozi
 
-    # Krátký stisk se vyhodnotí až při uvolnění. Kdyby visel na when_pressed,
-    # dlouhý stisk by nejdřív otevřel knihu (stisk přijde okamžitě) a teprve
-    # za dvě sekundy ukončil program — vypnutí čtečky by tak pokaždé spustilo
-    # stránkování celé knihy.
-    drzeno = False
-
-    def na_stisku():
-        nonlocal drzeno
-        drzeno = False
-
-    def na_drzeni():
-        nonlocal drzeno
-        drzeno = True
-        ctecka.ukonci()
-
-    def na_uvolneni():
-        if not drzeno:
-            ctecka.akce()
-
-    akce.when_pressed = na_stisku
-    akce.when_held = na_drzeni
-    akce.when_released = na_uvolneni
-
-    return [dalsi, predchozi, akce]
+    return [dalsi, predchozi]
 
 
 def pripoj_enkoder(ctecka):
