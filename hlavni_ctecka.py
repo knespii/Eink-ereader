@@ -46,15 +46,24 @@ DOBA_DRZENI = 2.0
 
 # Jak dlouho smyčka čeká na probuzení, když se nic neděje. V menu krátce, aby
 # se plynule posouval dlouhý název na OLEDu; při čtení nemá co animovat.
-TIK_MENU = 0.15
+# Čeká se na threading.Condition, ne přes time.sleep() — cvaknutí kodéru nebo
+# stisk tlačítka smyčku probudí okamžitě a nezůstane viset do konce tiku.
+TIK_MENU = 0.08
 TIK_CTENI = 1.0
-# O kolik pixelů posunout název na jeden tik. Při TIK_MENU 0,15 s vychází
-# 6 px na 40 px/s. Zrychluje se krokem, ne kratším tikem: víc překreslení za
-# sekundu by znamenalo víc provozu na I2C a víc práce pro Pi Zero W úplně zbytečně.
-KROK_TICKERU = 6
+
+# Rychlost posunu dlouhého názvu v pixelech za sekundu. Fáze se odvozuje od
+# time.monotonic(), ne od počtu proběhlých tiků: kdyby smyčku zdržel sken
+# složky nebo zápis pozice, text by se viditelně zadrhl. Při TIK_MENU 0,08 s
+# vychází ~3 px na snímek.
+RYCHLOST_TICKERU = 40.0
+
+# Jak dlouho název po přepnutí stojí, než se rozjede. Bez prodlevy odjede
+# začátek dřív, než ho oko stihne přečíst.
+PRODLEVA_TICKERU = 1.0
 
 # Jak často se přehledává složka s knihami. Dřív se skenovalo při každém
-# průchodu, což při TIK_MENU 0,15 s znamená sedm výpisů adresáře za sekundu.
+# průchodu, což by při TIK_MENU 0,08 s znamenalo dvanáct výpisů adresáře
+# za sekundu.
 PERIODA_SKENU = 2.0
 
 # Po kolika překresleních panel vybílit kvůli duchům. Vypnuto (0), protože
@@ -78,6 +87,17 @@ def zobraz(obrazovka, ctecka, fonty):
     # jen odsud, takže posledni_stav.json pořád popisuje obraz na e-inku —
     # menu na OLEDu do něj nezasahuje, protože OLED je po zapnutí stejně prázdný.
     knihovna.uloz_posledni_stav(snimek)
+
+
+def faze_tickeru(polozka_od, ted=None):
+    """Posun názvu v pixelech od chvíle, kdy se položka objevila.
+
+    Počítá se z uplynulého času, ne z počtu překreslení — smyčku může zdržet
+    sken složky nebo zápis pozice a text by se pak trhal. Prvních
+    PRODLEVA_TICKERU sekund stojí, aby se dal přečíst začátek.
+    """
+    ubehlo = (time.monotonic() if ted is None else ted) - polozka_od
+    return max(0, int((ubehlo - PRODLEVA_TICKERU) * RYCHLOST_TICKERU))
 
 
 class VystupOled:
@@ -213,7 +233,9 @@ def main():
     # OLED je po zapnutí prázdný, takže se vykreslí rovnou — na rozdíl od
     # e-inku ho to nic nestojí a uživatel hned vidí, kde čtečka stojí.
     oled.prekresli(ctecka.snimek())
-    faze_tickeru = 0
+    # Okamžik, kdy se na OLEDu objevila aktuální položka. Od něj se odvozuje
+    # posun názvu, takže rychlost nezávisí na tom, jak často se smyčka protočí.
+    polozka_od = time.monotonic()
     posledni_sken = 0.0
 
     try:
@@ -225,27 +247,29 @@ def main():
             # překreslí ještě jednou, místo aby se ztratil.
             if ctecka.cekej_na_prekresleni(TIK_MENU if v_menu else TIK_CTENI):
                 snimek = ctecka.snimek()
-                faze_tickeru = 0  # nová položka se začne číst od začátku
+                polozka_od = time.monotonic()  # nová položka se čte od začátku
 
                 if snimek.stav is Stav.MENU:
                     # Menu jede jen po OLEDu. E-ink se schválně nechává být:
                     # jeho refresh trvá ~10 s a při listování knihovnou by byl
                     # k ničemu. Drží dál poslední stránku, což je i to, co
                     # popisuje posledni_stav.json.
-                    oled.prekresli(snimek, faze_tickeru)
+                    oled.prekresli(snimek, 0)
                 else:
                     if PERIODA_CISTENI and od_cisteni >= PERIODA_CISTENI:
                         obrazovka.vycisti()
                         od_cisteni = 0
                     # Stránka jde na e-ink, OLED k ní ukáže jen číslo stránky.
-                    oled.prekresli(snimek, faze_tickeru)
+                    # Při čtení se název neposouvá — smyčka se sem dostane
+                    # jednou za otočení stránky, takže by to stejně jen cukalo.
+                    oled.prekresli(snimek, 0)
                     zobraz(obrazovka, ctecka, fonty)
                     od_cisteni += 1
             elif v_menu:
                 # Vypršel tik a nikdo nic nezmáčkl — jen se poposune dlouhý
-                # název. Když se celý vejde, prekresli() nepošle na I2C nic.
-                faze_tickeru += KROK_TICKERU
-                oled.prekresli(ctecka.snimek(), faze_tickeru)
+                # název. Když se celý vejde, prekresli() nepošle na I2C nic,
+                # takže statická položka nestojí ani jeden zápis na sběrnici.
+                oled.prekresli(ctecka.snimek(), faze_tickeru(polozka_od))
 
             # Drahá práce patří sem, ne do callbacku tlačítka. Než se do ní
             # smyčka pustí, dostane uživatel odezvu: parsování a stránkování

@@ -490,3 +490,90 @@ class TestHlaseniNacitani:
 
         assert pockej(lambda: "parsovani" in poradi)
         assert poradi.index("hlaseni") < poradi.index("parsovani")
+
+
+class TestFazeTickeru:
+    """Fáze se odvozuje od času, ne od počtu překreslení — smyčku může zdržet
+    sken složky nebo zápis pozice a název by se pak trhal."""
+
+    def test_pred_prodlevou_stoji(self):
+        assert h.faze_tickeru(0.0, h.PRODLEVA_TICKERU - 0.01) == 0
+
+    def test_po_prodleve_se_rozjede(self):
+        assert h.faze_tickeru(0.0, h.PRODLEVA_TICKERU + 1.0) == int(h.RYCHLOST_TICKERU)
+
+    def test_roste_linearne_s_casem(self):
+        za_sekundu = h.faze_tickeru(0.0, h.PRODLEVA_TICKERU + 1.0)
+        za_dve = h.faze_tickeru(0.0, h.PRODLEVA_TICKERU + 2.0)
+        assert za_dve == 2 * za_sekundu
+
+    def test_nezavisi_na_poctu_volani(self):
+        """Sto volání ve stejném okamžiku musí dát tutéž fázi."""
+        t = h.PRODLEVA_TICKERU + 0.7
+        assert len({h.faze_tickeru(0.0, t) for _ in range(100)}) == 1
+
+
+class TestScrollovaniNazvu:
+    """Posouvat se smí jen název. Ikona a počítadlo musí stát."""
+
+    DLOUHY = "Velmi dlouhy nazev knihy ktery se na displej nevejde.epub"
+
+    @pytest.fixture
+    def snimek_s_dlouhym_nazvem(self):
+        c = Ctecka(
+            {
+                "": [
+                    {"typ": "kniha", "nazev": self.DLOUHY, "cesta": self.DLOUHY},
+                    {"typ": "kniha", "nazev": "Duna.epub", "cesta": "Duna.epub"},
+                ]
+            }
+        )
+        c.dalsi()  # položky se řadí abecedně, Duna je první
+        snimek = c.snimek()
+        assert snimek.polozky[snimek.vyber].nazev == self.DLOUHY
+        return snimek
+
+    def _pruhy(self, obraz, fonty):
+        """(ikona, název, počítadlo) jako svislé výřezy podle rozvržení modulu."""
+        from PIL import Image, ImageDraw
+
+        kresli = ImageDraw.Draw(Image.new("1", (h.oled_ui.SIRKA, h.oled_ui.VYSKA)))
+        sirka_pocitadla = h.oled_ui._sirka(kresli, "2/2", fonty.drobne)
+        konec_nazvu = h.oled_ui.SIRKA - h.oled_ui.OKRAJ - sirka_pocitadla - 4
+        zacatek_pocitadla = h.oled_ui.SIRKA - h.oled_ui.OKRAJ - sirka_pocitadla
+
+        pole = obraz.load()
+
+        def vyrez(od, do):
+            return tuple(
+                pole[x, y] for x in range(od, do) for y in range(h.oled_ui.VYSKA)
+            )
+
+        return (
+            vyrez(0, h.oled_ui._IKONA_X + h.oled_ui._IKONA_SIRKA),
+            vyrez(h.oled_ui._TEXT_X, konec_nazvu),
+            vyrez(zacatek_pocitadla, h.oled_ui.SIRKA),
+        )
+
+    def test_nazev_se_posouva_ikona_a_pocitadlo_stoji(self, snimek_s_dlouhym_nazvem):
+        fonty = h.oled_ui.nacti_fonty()
+        pruhy = [
+            self._pruhy(
+                h.oled_ui.vykresli_oled(snimek_s_dlouhym_nazvem, fonty, faze), fonty
+            )
+            for faze in range(0, 60, 4)
+        ]
+
+        assert len({p[0] for p in pruhy}) == 1, "ikona bliká"
+        assert len({p[2] for p in pruhy}) == 1, "počítadlo bliká"
+        assert len({p[1] for p in pruhy}) > 1, "název se neposouvá"
+
+    def test_kratky_nazev_se_neposouva(self):
+        """Jinak by menu poskakovalo i tam, kde se všechno vejde."""
+        fonty = h.oled_ui.nacti_fonty()
+        snimek = Ctecka(["Duna.epub"]).snimek()
+        obrazy = {
+            h.oled_ui.vykresli_oled(snimek, fonty, faze).tobytes()
+            for faze in range(0, 60, 4)
+        }
+        assert len(obrazy) == 1

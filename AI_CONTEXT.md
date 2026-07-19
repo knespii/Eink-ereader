@@ -174,7 +174,9 @@ ctecka/
 - Krátký stisk visí na **`when_released`** (s vlajkou `drzeno`) — jinak by dlouhý stisk nejdřív otevřel knihu.
 - `pripoj_enkoder()` obaluje všechny tři callbacky kontrolou `Stav.MENU`. Chybějící kodér se odchytí a jen zaloguje — menu pak jede na tlačítkách.
 - `VystupOled` porovnává vykreslený obraz s posledním odeslaným a shodný na I2C neposílá. Bez toho by krátký název při 0,15s tiku znamenal 7 zápisů za sekundu pro nic.
-- Časování: `TIK_MENU = 0.15` (kvůli plynulému tickeru), `TIK_CTENI = 1.0`, `KROK_TICKERU = 6` (= 40 px/s), `PERIODA_SKENU = 2.0`.
+- Časování: `TIK_MENU = 0.08` (kvůli plynulému tickeru, ~12,5 snímku/s), `TIK_CTENI = 1.0`, `PERIODA_SKENU = 2.0`.
+- **Ticker jede podle hodin, ne podle tiků.** `faze_tickeru(polozka_od)` počítá posun z `time.monotonic()`: `RYCHLOST_TICKERU = 40` px/s po prodlevě `PRODLEVA_TICKERU = 1.0` s. Kdyby se fáze zvyšovala o konstantu na každý průchod, zdržel by ji sken složky nebo zápis pozice a text by se viditelně trhal. `time.sleep()` se nepoužívá nikde — čeká se na `threading.Condition`, takže cvaknutí kodéru smyčku probudí okamžitě.
+- Posouvá se **jen název**. Ikona a počítadlo leží mimo posouvaný pruh (`_text_ticker()` kreslí do vlastního obrázku a vkládá ho zpět), takže se nemůžou hnout ani probliknout. Hlídá to `TestScrollovaniNazvu`.
 - `PERIODA_CISTENI = 0` (čištění vypnuté, viz [PERFORMANCE]).
 - Hlavní smyčka: `cekej_na_prekresleni(tik podle stavu)` → v `MENU` jen `oled.prekresli()`, v `CTENI` `zobraz()` na e-ink + levný stavový řádek na OLED → `knihovna.obsluz()` → v `MENU` přeskenování stromu, ale nejvýš po `PERIODA_SKENU`.
 - Skenování je throttlované schválně: s `TIK_MENU` 0,15 s by se jinak vypisoval adresář sedmkrát za sekundu.
