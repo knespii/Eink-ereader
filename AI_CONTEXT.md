@@ -87,7 +87,7 @@ ctecka/
 ├── README.md                # dokumentace pro člověka
 ├── AI_CONTEXT.md            # tento soubor
 ├── fonts/                   # FontAwesome.ttf (4.7.0, OFL-1.1) + LICENSE-FontAwesome.txt
-├── tests/                   # 307 testů (pytest), bez hardwaru
+├── tests/                   # 336 testů (pytest), bez hardwaru
 │   ├── conftest.py          # autouse fixtury chránící progress.json a cache uživatele
 │   ├── test_stav.py, test_vykresleni.py, test_displej.py, test_knihovna.py
 │   ├── test_zpracovani_epub.py, test_zpracovani_textu.py
@@ -108,7 +108,8 @@ ctecka/
 
 ## `stav.py` — konečný automat
 - `Stav(StrEnum)`: `MENU` | `CTENI` | `RYCHLE_LISTOVANI`. `Typ(StrEnum)`: `SLOZKA` | `KNIHA` | `ZPET`.
-- **Rychlé listování:** `zacni_rychle_listovani()` (uloží `_puvodni_stranka`), `potvrd_rychle_listovani()`, `zrus_rychle_listovani()`. `Snimek.puvodni_cislo_stranky` je pro vykreslení OLEDu. Pozice se během listování **nezapisuje** — `_posun()` plní `_pozice_k_ulozeni` jen při `CTENI`, jinak by průletové stránky zbytečně psaly na SD kartu. Uloží je až potvrzení, a to jen když se stránka skutečně změnila.
+- **Rychlé listování:** `zacni_rychle_listovani()` (uloží `_puvodni_stranka`), `potvrd_rychle_listovani()`, `zrus_rychle_listovani()`, `zklidni_listovani()` (zhasne šipky po pauze).
+- **Krok a směr:** `dalsi(krok=1)` / `predchozi(krok=1)`; stránky se **ořezávají** do rozsahu, ne zahazují — se skokem 10 by jinak posledních devět stránek knihy nešlo dojet. `Snimek.smer_listovani` (-1/0/1) slouží jen k vykreslení šipek. **Menu se nezrychluje** (položek jsou desítky, skok o deset je přestřelení). `Snimek.puvodni_cislo_stranky` je pro vykreslení OLEDu. Pozice se během listování **nezapisuje** — `_posun()` plní `_pozice_k_ulozeni` jen při `CTENI`, jinak by průletové stránky zbytečně psaly na SD kartu. Uloží je až potvrzení, a to jen když se stránka skutečně změnila.
 - `Polozka` = frozen dataclass (`typ`, `nazev`, `cesta`). `POLOZKA_ZPET` je syntetické `".."` — na disku neexistuje, do pohledu se přidává jen mimo kořen a je vždy první.
 - `Snimek` = frozen dataclass: stav, **polozky** (obsah aktuálního adresáře včetně `..`), **adresar**, vyber, kniha (relativní cesta), **kniha_nazev** (jen jméno souboru, k zobrazení), stranka, cislo_stranky, pocet_stranek, nacita_se, chyba. Pole `seznam_knih` zůstalo jako n-tice názvů kvůli `vykresleni.py`.
 - `Ctecka(seznam_knih=None, prekreslit_na_startu=True)`.
@@ -161,7 +162,7 @@ ctecka/
 - **Ticker:** název delší než pruh se posouvá podle `faze`, vykreslený dvakrát za sebou, aby přetočení najelo plynule. Kreslí se do vlastního pruhu a vkládá zpět, jinak by přetekl přes počítadlo. Přípona `.epub` se odřezává — na 128 px se počítá každý pixel.
 - **Ukazatel postupu** `_ukazatel_postupu(obraz, podil)` — vodorovná čára na spodních 3 px (`VYSKA_UKAZATELE`) dlouhá `podil × SIRKA`, minimálně 1 px (nulová čára vypadá jako rozbitý displej). Používá se dvakrát: při `CTENI` jako postup v knize (`cislo_stranky / pocet_stranek` — z čísla stránky 1..N, ne z indexu, jinak by poslední stránka nikdy nevyšla na plnou šířku) a pod hláškou „Načítám…" jako postup parsování. Rozlišení je hrubé, u knihy o 1465 stranách se čára hne jednou za ~11 stránek.
 - `vykresli_hlaseni(text, fonty, podil=None)` — vycentrovaná hláška; s `podil` přikreslí pod ni ukazatel.
-- **Rychlé listování** má vlastní rozvržení (`_rychle_listovani()`), ne čtecí řádek: nahoře drobným fontem „Původní: X" (`LIST_Y_HORNI = 0`), uprostřed tlustý obrys s výplní (`LIST_PRUH_OD = 10`, `LIST_PRUH_DO = 21`), dole vycentrované „Y / Z" (`LIST_Y_DOLNI = 23`). Jiný vzhled je záměr — uživatel má poznat, že e-ink teď nesleduje kodér a že se výběr teprve potvrzuje.
+- **Rychlé listování** má vlastní rozvržení (`_rychle_listovani()`), ne čtecí řádek: nahoře drobným fontem „Původní: X" (`LIST_Y_HORNI = 0`), uprostřed tlustý obrys s výplní (`LIST_PRUH_OD = 10`, `LIST_PRUH_DO = 21`), dole vycentrované „Y / Z" (`LIST_Y_DOLNI = 23`) se šipkami podle `smer_listovani` (`145 / 300 >>`, `<< 145 / 300`, nebo čisté `145 / 300` v klidu). Pruh je `rounded_rectangle(radius=2)`. Oba řádky centruje `_text_nahore_stred()` přes `font.getlength()` (skutečný advance, ne šířka bboxu — u textu končícího šipkou se to liší a řádky by se proti sobě rozjely). Jiný vzhled je záměr — uživatel má poznat, že e-ink teď nesleduje kodér a že se výběr teprve potvrzuje.
 - **Pořadí kreslení je závazné:** ukazatel se kreslí **až po** `_radek()`. Ticker vkládá posouvaný pruh přes celou výšku obrázku, takže dřív nakreslená čára by se v jeho sloupcích smazala. Hlídá to `test_prezije_posun_tickeru`.
 - `vytvor_oled(port=1, adresa=0x3C)` — lazy import `luma.oled`; když knihovna, I2C nebo panel chybí, vrátí `_DummyOled` a čtečka běží dál.
 
@@ -189,6 +190,7 @@ ctecka/
 - `pripoj_enkoder()` odchytí chybějící kodér a jen zaloguje — menu pak jede na tlačítkách.
 - `VystupOled` porovnává vykreslený obraz s posledním odeslaným a shodný na I2C neposílá. Bez toho by krátký název při 0,15s tiku znamenal 7 zápisů za sekundu pro nic. `hlaseni(text, podil)` tohle porovnání obchází — hláška se musí objevit vždy.
 - `hlas_nacitani(oled)` vrací callback pro `knihovna.obsluz()`, který během parsování překresluje ukazatel, ale nejvýš jednou za `PERIODA_HLASENI = 0.1` s. Parser hlásí tisíckrát za knihu; kreslit tolikrát by načítání znatelně prodloužilo.
+- **Akcelerace kodéru** (`Akcelerace`): `PRAH_ZRYCHLENI = 0.08` s mezi cvaknutími → `KROK_ZRYCHLENY = 10`, jinak 1. Drží jen čas posledního cvaknutí a krok z něj počítá — žádná akumulovaná „rychlost", která by se musela stárnout (stejný důvod jako u `Hlidac.faze()`). První cvaknutí po pauze je vždy jednotkové: uživatel míří, netočí. `krok()` se volá **až za kontrolou stavu**, aby ignorované cvaknutí při čtení neposunulo měřený čas. Šipky zhasíná smyčka přes `je_klid()` po `PRODLEVA_SMERU = 0.6` s — je to důsledek uplynulého času, který nemá kdo ohlásit.
 - Časování: `TIK_MENU = 0.08` (kvůli plynulému tickeru, ~12,5 snímku/s), `TIK_CTENI = 1.0`, `PERIODA_SKENU = 2.0`.
 - **Ticker jede podle hodin, ne podle tiků.** `faze_tickeru(polozka_od)` počítá posun z `time.monotonic()`: `RYCHLOST_TICKERU = 40` px/s po prodlevě `PRODLEVA_TICKERU = 1.0` s. Kdyby se fáze zvyšovala o konstantu na každý průchod, zdržel by ji sken složky nebo zápis pozice a text by se viditelně trhal. `time.sleep()` se nepoužívá nikde — čeká se na `threading.Condition`, takže cvaknutí kodéru smyčku probudí okamžitě.
 - Posouvá se **jen název**. Ikona a počítadlo leží mimo posouvaný pruh (`_text_ticker()` kreslí do vlastního obrázku a vkládá ho zpět), takže se nemůžou hnout ani probliknout. Hlídá to `TestScrollovaniNazvu`.
@@ -323,7 +325,7 @@ Naměřeno na Pi Zero W:
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest          # 307 passed, 2 skipped
+.venv/bin/python -m pytest          # 336 passed, 2 skipped
 ```
 
 - **Bez hardwaru:** gpiozero jede na `MockFactory`, takže jde otestovat i dvouvteřinové držení tlačítka nebo kvadraturní sekvenci kodéru.

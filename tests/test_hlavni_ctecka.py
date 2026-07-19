@@ -1141,3 +1141,185 @@ class TestRychleListovani:
 
         assert ctecka.snimek().cislo_stranky == 2
         assert zaznam == [], f"kodér při čtení překreslil {zaznam}"
+
+
+class TestAkcelerace:
+    """Krok podle rychlosti ruky. Čas se vždy vstřikuje, aby test neměřil
+    skutečné hodiny a nebyl tím náhodně křehký."""
+
+    def test_prvni_cvaknuti_je_vzdy_po_jedne(self):
+        """Po pauze uživatel míří na konkrétní stránku, netočí."""
+        a = h.Akcelerace()
+        assert a.krok(ted=100.0) == 1
+
+    def test_rychla_serie_zrychli(self):
+        a = h.Akcelerace(prah=0.08, zrychleny=10)
+        assert a.krok(ted=100.00) == 1
+        assert a.krok(ted=100.02) == 10
+        assert a.krok(ted=100.04) == 10
+
+    def test_pomale_krokovani_nezrychli(self):
+        a = h.Akcelerace(prah=0.08, zrychleny=10)
+        a.krok(ted=100.0)
+        assert a.krok(ted=100.3) == 1
+        assert a.krok(ted=100.6) == 1
+
+    def test_zastaveni_zrychleni_zrusi(self):
+        """Po pauze uprostřed série se musí vrátit přesné krokování — jinak by
+        doladění pozice po rychlém skoku přestřelovalo."""
+        a = h.Akcelerace(prah=0.08, zrychleny=10)
+        a.krok(ted=100.0)
+        assert a.krok(ted=100.02) == 10
+        assert a.krok(ted=101.0) == 1
+
+    def test_hranice_prahu_patri_pomalemu(self):
+        """Přesně na prahu se ještě nezrychluje. Hodnoty jsou mocniny dvojky,
+        aby test nezkoumal zaokrouhlení floatu místo logiky."""
+        a = h.Akcelerace(prah=0.25, zrychleny=10)
+        a.krok(ted=100.0)
+        assert a.krok(ted=100.25) == 1
+
+    def test_klid_po_prodleve(self):
+        a = h.Akcelerace()
+        assert a.je_klid(ted=100.0) is True, "bez cvaknutí je klid"
+        a.krok(ted=100.0)
+        assert a.je_klid(ted=100.2, prodleva=0.6) is False
+        assert a.je_klid(ted=100.7, prodleva=0.6) is True
+
+
+def rychle_cvaknuti(pin, prvni, druhy):
+    """Cvaknutí kodéru bez prodlevy — napodobuje svižné otáčení rukou."""
+    pin(prvni).drive_low()
+    pin(druhy).drive_low()
+    pin(prvni).drive_high()
+    pin(druhy).drive_high()
+
+
+class TestZrychleneListovaniNaZelezes:
+    """Akcelerace propojená s kodérem a stavem, přes skutečné pin callbacky."""
+
+    @pytest.fixture
+    def v_listovani(self):
+        c = Ctecka(STROM_ATRAPA)
+        akcelerace = h.Akcelerace(prah=10.0, zrychleny=10)  # vše se bere jako rychlé
+        zarizeni = h.pripoj_enkoder(c, None, akcelerace)
+        assert zarizeni, "kodér se nepřipojil — piny už asi drží jiný test"
+        c.dalsi()
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("Alliances.epub", [f"s{i}" for i in range(100)], 50)
+        c.zacni_rychle_listovani()
+        yield c, pin_enkoderu(zarizeni), akcelerace
+        for z in zarizeni:
+            z.close()
+
+    def test_rychle_otaceni_skace_po_deseti(self, v_listovani):
+        c, pin, _ = v_listovani
+        rychle_cvaknuti(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # první = 1
+        rychle_cvaknuti(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # už zrychleně
+        assert c.snimek().cislo_stranky == 62
+        assert c.snimek().smer_listovani == 1
+
+    def test_otaceni_zpet_nastavi_smer(self, v_listovani):
+        c, pin, _ = v_listovani
+        rychle_cvaknuti(pin, h.PIN_ENKODER_DT, h.PIN_ENKODER_CLK)
+        assert c.snimek().smer_listovani == -1
+        assert c.snimek().cislo_stranky == 50
+
+    def test_pri_cteni_kodér_nehne_ani_casem(self, v_listovani):
+        """Ignorované cvaknutí při čtení nesmí posunout měřený čas — jinak by
+        první platné cvaknutí po vstupu do listování naskočilo jako zrychlené."""
+        c, pin, akcelerace = v_listovani
+        c.zrus_rychle_listovani()
+        assert c.snimek().stav is Stav.CTENI
+
+        rychle_cvaknuti(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        assert c.snimek().cislo_stranky == 51, "kodér při čtení otočil stránku"
+        assert akcelerace.je_klid(prodleva=0.0) is True
+
+        c.zacni_rychle_listovani()
+        rychle_cvaknuti(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        assert c.snimek().cislo_stranky == 52, "první cvaknutí mělo být po jedné"
+
+
+class TestGrafikaRychlehoListovani:
+    """Vzhled obrazovky rychlého listování — šipky, centrování, zakulacení.
+
+    Kreslí se do obrázku a čtou se pixely: OLED na desktopu není a tohle je
+    jediný způsob, jak ověřit, co by na něm bylo vidět.
+    """
+
+    POCET = 300
+
+    def _snimek(self, smer=0, stranka=144):
+        c = Ctecka(["Duna.epub"])
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("Duna.epub", [{"typ": "text", "obsah": ["x"]}] * self.POCET, stranka)
+        c.zacni_rychle_listovani()
+        if smer > 0:
+            c.dalsi()
+        elif smer < 0:
+            c.predchozi()
+        return c.snimek()
+
+    def _obraz(self, smer=0):
+        return h.oled_ui.vykresli_oled(self._snimek(smer), h.oled_ui.nacti_fonty())
+
+    def _rozsah_x(self, obraz, od_y, do_y):
+        """Krajní rozsvícené sloupce v pásmu řádků — kde text opravdu leží."""
+        pole = obraz.load()
+        sloupce = [
+            x
+            for x in range(obraz.width)
+            for y in range(od_y, do_y + 1)
+            if pole[x, y]
+        ]
+        return (min(sloupce), max(sloupce)) if sloupce else None
+
+    def test_sipky_vpred_jsou_vpravo(self):
+        assert h.oled_ui._radek_pozice(self._snimek(smer=1)) == "146 / 300 >>"
+
+    def test_sipky_zpet_jsou_vlevo(self):
+        assert h.oled_ui._radek_pozice(self._snimek(smer=-1)) == "<< 144 / 300"
+
+    def test_v_klidu_jsou_cisla_bez_sipek(self):
+        assert h.oled_ui._radek_pozice(self._snimek(smer=0)) == "145 / 300"
+
+    @pytest.mark.parametrize("smer", [0, 1, -1])
+    def test_spodni_radek_je_vycentrovany(self, smer):
+        """Okraje vlevo a vpravo se smí lišit nejvýš o pixel (lichá šířka)."""
+        obraz = self._obraz(smer)
+        levy, pravy = self._rozsah_x(obraz, h.oled_ui.LIST_Y_DOLNI, h.oled_ui.VYSKA - 1)
+        assert abs(levy - (h.oled_ui.SIRKA - 1 - pravy)) <= 1, (
+            f"nevycentrováno: vlevo {levy}, vpravo {h.oled_ui.SIRKA - 1 - pravy}"
+        )
+
+    def test_horni_radek_je_vycentrovany(self):
+        obraz = self._obraz()
+        levy, pravy = self._rozsah_x(obraz, h.oled_ui.LIST_Y_HORNI, h.oled_ui.LIST_PRUH_OD - 1)
+        assert abs(levy - (h.oled_ui.SIRKA - 1 - pravy)) <= 1
+
+    def test_pruh_ma_zakulacene_rohy(self):
+        """Rohový pixel obrysu musí být zhasnutý — jinak je to obyčejný obdélník."""
+        pole = self._obraz().load()
+        for x, y in (
+            (0, h.oled_ui.LIST_PRUH_OD),
+            (h.oled_ui.SIRKA - 1, h.oled_ui.LIST_PRUH_OD),
+            (0, h.oled_ui.LIST_PRUH_DO),
+            (h.oled_ui.SIRKA - 1, h.oled_ui.LIST_PRUH_DO),
+        ):
+            assert not pole[x, y], f"roh ({x}, {y}) svítí — pruh není zakulacený"
+
+    def test_pruh_ma_obrys_i_vypln(self):
+        pole = self._obraz().load()
+        stred_y = (h.oled_ui.LIST_PRUH_OD + h.oled_ui.LIST_PRUH_DO) // 2
+        assert pole[h.oled_ui.SIRKA - 1, stred_y], "chybí pravý okraj obrysu"
+        assert pole[h.oled_ui.LIST_VYPLN_OKRAJ + 2, stred_y], "chybí výplň"
+
+    def test_sipky_nezasahuji_do_pruhu(self):
+        """Delší řádek se šipkami nesmí přerůst do pásma progress baru."""
+        pole = self._obraz(smer=1).load()
+        assert not any(
+            pole[x, h.oled_ui.LIST_PRUH_DO + 1] for x in range(h.oled_ui.SIRKA)
+        )

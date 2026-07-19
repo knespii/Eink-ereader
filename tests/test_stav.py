@@ -387,3 +387,72 @@ class TestSlozky:
         assert [p.nazev for p in s.polozky] == ["a.epub", "b.epub"]
         assert s.adresar == ""
         assert s.seznam_knih == ("a.epub", "b.epub")  # vykreslení bere názvy
+
+
+class TestKrokAsmer:
+    """Zrychlené listování: skok o víc stránek + směr pro šipky na OLEDu."""
+
+    @pytest.fixture
+    def kniha(self):
+        c = Ctecka(["a.epub"])
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("a.epub", [f"s{i}" for i in range(100)], 50)
+        c.spotrebuj_prekresleni()
+        return c
+
+    def test_krok_posune_o_vic_stranek(self, kniha):
+        kniha.dalsi(10)
+        assert kniha.snimek().cislo_stranky == 61
+
+    def test_krok_zpet(self, kniha):
+        kniha.predchozi(10)
+        assert kniha.snimek().cislo_stranky == 41
+
+    def test_vychozi_krok_je_jedna(self, kniha):
+        kniha.dalsi()
+        assert kniha.snimek().cislo_stranky == 52
+
+    def test_orez_na_konci_dojede_na_posledni(self, kniha):
+        """Ořez, ne zahození: se skokem 10 by jinak posledních devět stránek
+        knihy nešlo dojet vůbec."""
+        for _ in range(10):
+            kniha.dalsi(10)
+        assert kniha.snimek().cislo_stranky == 100
+
+    def test_orez_na_zacatku_dojede_na_prvni(self, kniha):
+        for _ in range(10):
+            kniha.predchozi(10)
+        assert kniha.snimek().cislo_stranky == 1
+
+    def test_smer_se_zaznamena(self, kniha):
+        assert kniha.snimek().smer_listovani == 0
+        kniha.dalsi()
+        assert kniha.snimek().smer_listovani == 1
+        kniha.predchozi()
+        assert kniha.snimek().smer_listovani == -1
+
+    def test_zklidneni_smer_vynuluje(self, kniha):
+        kniha.dalsi()
+        assert kniha.zklidni_listovani() is True
+        assert kniha.snimek().smer_listovani == 0
+        # Podruhé už není co měnit, takže se smyčka nebudí pro nic.
+        assert kniha.zklidni_listovani() is False
+
+    def test_vstup_do_listovani_zacina_v_klidu(self, kniha):
+        kniha.dalsi()
+        kniha.zacni_rychle_listovani()
+        assert kniha.snimek().smer_listovani == 0
+
+    def test_menu_se_nezrychluje(self):
+        """Položek jsou desítky — skok o deset je přestřelení, ne pomoc."""
+        c = Ctecka([f"k{i}.epub" for i in range(30)])
+        c.dalsi(10)
+        assert c.snimek().vyber == 1
+
+    def test_listovani_neuklada_pozici_ani_se_skokem(self, kniha):
+        kniha.zacni_rychle_listovani()
+        kniha.dalsi(10)
+        assert kniha.vyzvedni_pozici_k_ulozeni() is None
+        kniha.potvrd_rychle_listovani()
+        assert kniha.vyzvedni_pozici_k_ulozeni() == ("a.epub", 60)

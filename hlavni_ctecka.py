@@ -73,6 +73,25 @@ RYCHLOST_TICKERU = 40.0
 # začátek dřív, než ho oko stihne přečíst.
 PRODLEVA_TICKERU = 1.0
 
+# --- ZRYCHLENÉ LISTOVÁNÍ ---
+# Točí-li uživatel kodérem svižně, přeskakuje se po deseti stránkách; jednotlivá
+# cvaknutí zůstávají po jedné. Prahem je rozestup mezi cvaknutími, ne jejich
+# počet: rychlost ruky se pozná hned na druhém cvaknutí a nemusí se čekat, až
+# se nasbírá série.
+#
+# 0,08 s je ~12 cvaknutí za sekundu. Zadání navrhovalo 0,05 s, ale to je na
+# běžném 20-pulzním kodéru rychlost, které jde dosáhnout jen trhnutím — práh by
+# se v praxi skoro netrefil. Naopak výš než ~0,12 s se do zrychlení spadne i při
+# klidném krokování a přestřelovalo by to.
+PRAH_ZRYCHLENI = 0.08
+KROK_ZRYCHLENY = 10
+KROK_ZAKLADNI = 1
+
+# Jak dlouho po posledním cvaknutí zůstanou na OLEDu šipky směru. Kratší by
+# blikaly mezi cvaknutími při pomalém krokování, delší by lhaly o tom, že se
+# ještě točí.
+PRODLEVA_SMERU = 0.6
+
 # Nejkratší rozestup mezi překresleními ukazatele během načítání knihy. Parser
 # hlásí postup tisíckrát za knihu; bez omezení by samotné kreslení a zápis na
 # I2C načítání znatelně prodloužily.
@@ -262,6 +281,42 @@ def hlas_nacitani(oled, perioda=PERIODA_HLASENI):
     return hlas
 
 
+class Akcelerace:
+    """Jak velký krok si zaslouží tohle cvaknutí kodéru — podle rychlosti ruky.
+
+    Drží jediný údaj: kdy se cvaklo naposled. Krok se z něj počítá, nikde se
+    neakumuluje žádná „rychlost" — stav, který by se musel stárnout a resetovat,
+    je u věci řízené hodinami zbytečný a rozchází se, když se ruka zastaví.
+
+    Sáhne na ni callback kodéru (cizí vlákno) i hlavní smyčka, proto zámek.
+    Je to jen čtení a zápis jednoho floatu, stejně jako u Hlidace.
+    """
+
+    def __init__(self, prah=PRAH_ZRYCHLENI, zrychleny=KROK_ZRYCHLENY):
+        self._prah = prah
+        self._zrychleny = zrychleny
+        self._zamek = threading.Lock()
+        self._posledni = None
+
+    def krok(self, ted=None):
+        """Zaznamená cvaknutí a vrátí, o kolik stránek se má posunout."""
+        ted = time.monotonic() if ted is None else ted
+        with self._zamek:
+            predchozi = self._posledni
+            self._posledni = ted
+        # První cvaknutí po pauze je vždy jednotkové: uživatel míří, netočí.
+        if predchozi is None or ted - predchozi >= self._prah:
+            return KROK_ZAKLADNI
+        return self._zrychleny
+
+    def je_klid(self, ted=None, prodleva=PRODLEVA_SMERU):
+        """True, když se od posledního cvaknutí nic neděje — šipky můžou zhasnout."""
+        ted = time.monotonic() if ted is None else ted
+        with self._zamek:
+            posledni = self._posledni
+        return posledni is None or ted - posledni >= prodleva
+
+
 def faze_tickeru(polozka_od, ted=None):
     """Posun názvu v pixelech od chvíle, kdy se položka objevila.
 
@@ -382,7 +437,7 @@ def probouzeci(ctecka, hlidac, co_udelat):
     return obsluha
 
 
-def pripoj_enkoder(ctecka, hlidac=None):
+def pripoj_enkoder(ctecka, hlidac=None, akcelerace=None):
     """Naváže rotační kodér na stav. Vrácený seznam si volající musí podržet.
 
     Tlačítko v kodéru obsluhuje celé menu samo:
@@ -407,12 +462,21 @@ def pripoj_enkoder(ctecka, hlidac=None):
         logging.warning("Rotační kodér není dostupný (%s), pokračuji bez něj.", e)
         return []
 
+    # Vlastní instance, když ji volající nedodal — kodér musí jít navěsit i
+    # samostatně (testy, čtečka bez správy napájení).
+    if akcelerace is None:
+        akcelerace = Akcelerace()
+
     # Otáčení smí i při rychlém listování — tam je právě k tomu. Hluché
     # zůstává jen při běžném čtení, kde stránky patří tlačítkům u e-inku.
+    #
+    # Krok se počítá až tady, po kontrole stavu: cvaknutí, které se má
+    # ignorovat, nesmí posunout ani měřený čas, jinak by první platné cvaknutí
+    # po chvíli točení při čtení naskočilo rovnou jako zrychlené.
     def jen_po_oledu(co_udelat):
         def obsluha():
             if ctecka.snimek().stav is not Stav.CTENI:
-                co_udelat()
+                co_udelat(akcelerace.krok())
 
         return obsluha
 
@@ -487,7 +551,10 @@ def main():
     # Konstanty se čtou až tady, ne jako výchozí hodnoty parametrů — testy si je
     # tak můžou přenastavit na zlomky sekundy.
     hlidac = Hlidac(DOBA_DO_SPANKU, DOBA_DO_VYPNUTI)
-    ovladace = pripoj_tlacitka(ctecka, hlidac) + pripoj_enkoder(ctecka, hlidac)
+    akcelerace = Akcelerace()
+    ovladace = pripoj_tlacitka(ctecka, hlidac) + pripoj_enkoder(
+        ctecka, hlidac, akcelerace
+    )
     vypnout = False
 
     # Panel sice drží obraz i bez napájení, ale první display() ho celý
@@ -513,6 +580,12 @@ def main():
             # kodéru stálo ~29 s a celý režim by ztratil smysl. Tik je proto
             # taky krátký — displej musí stíhat za rukou.
             jen_oled = v_menu or stav is Stav.RYCHLE_LISTOVANI
+
+            # Šipky směru zhasnou, když ruka pustí kodér. Je to důsledek
+            # uplynulého času, ne vstupu, takže to nemá kdo ohlásit — musí se
+            # na to ptát smyčka. Překreslení si vyžádá jen skutečná změna.
+            if stav is Stav.RYCHLE_LISTOVANI and akcelerace.je_klid():
+                ctecka.zklidni_listovani()
 
             # Úsporu vyhodnocuje smyčka, ne callback: zhasnout a rozsvítit
             # znamená sáhnout na I2C, a to do cizího vlákna nepatří. Srovnává

@@ -48,6 +48,17 @@ LIST_PRUH_OD = 10
 LIST_PRUH_DO = 21
 LIST_Y_DOLNI = 23
 
+# Zakulacení rohů pruhu. Na 12 px vysokém obdélníku je 2 px maximum, které je
+# ještě vidět jako záměr a ne jako uříznutý roh.
+LIST_RADIUS = 2
+# Odstup výplně od obrysu, aby spolu nesplynuly.
+LIST_VYPLN_OKRAJ = 2
+
+# Směr listování. ASCII schválně: DejaVu sice má „«/»", ale dvojitá lomená
+# závorka je v 9 px kaše, kdežto dva znaky „>" zůstanou čitelné.
+SIPKA_VPRED = ">>"
+SIPKA_ZPET = "<<"
+
 # --- FONTY ---
 
 FONT_TEXT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -238,27 +249,65 @@ def _rychle_listovani(obraz, fonty, snimek):
     """
     kresli = ImageDraw.Draw(obraz)
 
-    _text_nahore(kresli, f"Původní: {snimek.puvodni_cislo_stranky}", fonty.drobne, OKRAJ, LIST_Y_HORNI)
+    _text_nahore_stred(
+        kresli, f"Původní: {snimek.puvodni_cislo_stranky}", fonty.drobne, LIST_Y_HORNI
+    )
+    _text_nahore_stred(kresli, _radek_pozice(snimek), fonty.drobne, LIST_Y_DOLNI)
 
-    dole = f"{snimek.cislo_stranky} / {snimek.pocet_stranek}"
-    x = max(OKRAJ, (SIRKA - _sirka(kresli, dole, fonty.drobne)) // 2)
-    _text_nahore(kresli, dole, fonty.drobne, x, LIST_Y_DOLNI)
-
-    kresli.rectangle((0, LIST_PRUH_OD, SIRKA - 1, LIST_PRUH_DO), outline=255)
+    kresli.rounded_rectangle(
+        (0, LIST_PRUH_OD, SIRKA - 1, LIST_PRUH_DO), radius=LIST_RADIUS, outline=255
+    )
     if snimek.pocet_stranek > 0:
         # Z čísla stránky (1..N), stejně jako u čtecího ukazatele — jinak by
         # poslední stránka nikdy nevyplnila pruh celý.
         podil = min(1.0, max(0.0, snimek.cislo_stranky / snimek.pocet_stranek))
         # Vnitřek pruhu, aby výplň nesplynula s obrysem.
-        vnitrek = SIRKA - 2 * 2
+        vnitrek = SIRKA - 2 * LIST_VYPLN_OKRAJ
         sirka = max(1, round(vnitrek * podil))
-        kresli.rectangle((2, LIST_PRUH_OD + 2, 2 + sirka - 1, LIST_PRUH_DO - 2), fill=255)
+        kresli.rounded_rectangle(
+            (
+                LIST_VYPLN_OKRAJ,
+                LIST_PRUH_OD + LIST_VYPLN_OKRAJ,
+                LIST_VYPLN_OKRAJ + sirka - 1,
+                LIST_PRUH_DO - LIST_VYPLN_OKRAJ,
+            ),
+            radius=LIST_RADIUS,
+            fill=255,
+        )
 
 
-def _text_nahore(kresli, text, font, x, y):
-    """Text s horním okrajem na `y` — pro layout, kde se řádky skládají pod sebe."""
-    levy, horni, _, _ = kresli.textbbox((0, 0), text, font=font)
-    kresli.text((x - levy, y - horni), text, font=font, fill=255)
+def _radek_pozice(snimek):
+    """„145 / 300" se šipkami na té straně, kam se právě točí.
+
+    Šipky jsou jediná zpětná vazba o směru: čísla se při zrychleném listování
+    mění po deseti a z pouhého skoku se směr přečíst nedá.
+    """
+    pozice = f"{snimek.cislo_stranky} / {snimek.pocet_stranek}"
+    if snimek.smer_listovani > 0:
+        return f"{pozice} {SIPKA_VPRED}"
+    if snimek.smer_listovani < 0:
+        return f"{SIPKA_ZPET} {pozice}"
+    return pozice
+
+
+def _text_nahore_stred(kresli, text, font, y):
+    """Text vodorovně vycentrovaný, s horním okrajem na `y`.
+
+    Střed se počítá z `getlength()` (skutečný advance), ne z šířky bboxu:
+    u textu končícího mezerou nebo šipkou se obojí liší a řádky by se proti
+    sobě znatelně rozjely. Fallback na bbox je kvůli vestavěnému fontu, který
+    `getlength()` nemusí mít.
+    """
+    try:
+        sirka_textu = font.getlength(text)
+    except AttributeError:
+        sirka_textu = _sirka(kresli, text, font)
+
+    x = max(0, round((SIRKA - sirka_textu) / 2))
+    # Svisle se odsazuje o bbox: getlength() měří jen vodorovně a horní okraj
+    # se u různě vysokých znaků (číslice vs. „>") jinak rozchází.
+    _, horni, _, _ = kresli.textbbox((0, 0), text, font=font)
+    kresli.text((x, y - horni), text, font=font, fill=255)
 
 
 def _ukazatel_postupu(obraz, podil):

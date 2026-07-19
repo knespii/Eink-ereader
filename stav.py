@@ -86,6 +86,8 @@ class Snimek:
     # Číslo stránky (1..N), na které se stálo při vstupu do RYCHLE_LISTOVANI.
     # Mimo tento stav je rovné cislo_stranky a nikdo se na něj nedívá.
     puvodni_cislo_stranky: int = 0
+    # -1 zpět, 1 vpřed, 0 klid. Kreslí se z něj šipky při rychlém listování.
+    smer_listovani: int = 0
 
 
 class Ctecka:
@@ -111,6 +113,9 @@ class Ctecka:
         self._stranka = 0
         # Kam se vrátit, když uživatel rychlé listování zruší.
         self._puvodni_stranka = 0
+        # Kterým směrem se právě točí kodérem: -1 zpět, 1 vpřed, 0 klid.
+        # Čistě pro vykreslení šipek na OLEDu, na stav nemá vliv.
+        self._smer_listovani = 0
 
         self._pozadavek: str | None = None  # čeká na vyzvednutí
         self._nacitana: str | None = None  # vyzvednuto, právě se parsuje
@@ -151,6 +156,7 @@ class Ctecka:
                 nacita_se=self._nacita_se(),
                 chyba=self._chyba,
                 puvodni_cislo_stranky=self._puvodni_stranka + 1,
+                smer_listovani=self._smer_listovani,
             )
 
     @property
@@ -297,13 +303,27 @@ class Ctecka:
 
     # --- OBSLUHA TLAČÍTEK (volá se z cizích vláken) ---
 
-    def dalsi(self):
-        """Další kniha v menu / další stránka v knize."""
-        self._posun(1)
+    def dalsi(self, krok=1):
+        """Další kniha v menu / o `krok` stránek dál v knize."""
+        self._posun(1, krok)
 
-    def predchozi(self):
-        """Předchozí kniha v menu / předchozí stránka v knize."""
-        self._posun(-1)
+    def predchozi(self, krok=1):
+        """Předchozí kniha v menu / o `krok` stránek zpět v knize."""
+        self._posun(-1, krok)
+
+    def zklidni_listovani(self):
+        """Ruka pustila kodér — šipky na OLEDu zhasnou.
+
+        Volá hlavní smyčka, ne callback: je to důsledek *uplynulého času*, a
+        ten nikdo nehlásí. Překreslení se vyžádá jen když se směr opravdu
+        změnil, jinak by se smyčka budila každý tik pro nic.
+        """
+        with self._zamek:
+            if self._smer_listovani == 0:
+                return False
+            self._smer_listovani = 0
+            self._zadej_prekresleni()
+            return True
 
     def akce(self):
         """Krátký stisk tlačítka v kodéru — jediné potvrzovací tlačítko čtečky.
@@ -498,26 +518,44 @@ class Ctecka:
 
     # --- VNITŘNÍ (volat jen se zámkem) ---
 
-    def _posun(self, smer):
+    def _posun(self, smer, krok=1):
         with self._zamek:
             if self._konec or self._nacita_se():
                 return
 
             if self._stav is Stav.MENU:
+                # V menu se nezrychluje: položek jsou desítky, ne tisíce, a
+                # přeskočit deset knih naráz je spíš přestřelení než pomoc.
                 novy = self._vyber + smer
                 if 0 <= novy < len(self._pohled()):
                     self._vyber = novy
                     self._zadej_prekresleni()
-            else:
-                novy = self._stranka + smer
-                if 0 <= novy < len(self._stranky):
-                    self._stranka = novy
-                    # Při rychlém listování se pozice nezapisuje: uživatel se
-                    # může vrátit zpět a průletové stránky nemají co na SD kartě
-                    # dělat. Uloží je až potvrd_rychle_listovani().
-                    if self._stav is Stav.CTENI:
-                        self._pozice_k_ulozeni = (self._kniha, novy)
-                    self._zadej_prekresleni()
+                return
+
+            # Stránky se **ořezávají**, ne zahazují: se zrychleným krokem by
+            # jinak deset stránek před koncem knihy nešlo dojet na konec vůbec.
+            novy = self._stranka + smer * max(1, krok)
+            novy = max(0, min(novy, len(self._stranky) - 1))
+
+            zmena = novy != self._stranka
+            # Směr se drží i při ořezu na krajní stránce: ruka se pořád točí a
+            # šipka na OLEDu má ukazovat, kam — jinak by na konci knihy zhasla
+            # a vypadalo by to jako zaseknutý kodér.
+            zmena_smeru = smer != self._smer_listovani
+            self._smer_listovani = smer
+
+            if zmena:
+                self._stranka = novy
+                # Při rychlém listování se pozice nezapisuje: uživatel se
+                # může vrátit zpět a průletové stránky nemají co na SD kartě
+                # dělat. Uloží je až potvrd_rychle_listovani().
+                if self._stav is Stav.CTENI:
+                    self._pozice_k_ulozeni = (self._kniha, novy)
+
+            # Samotná změna směru překresluje jen tam, kde je vidět. Při čtení
+            # by to byl zbytečný budíček pro smyčku — e-ink stejně nic nepošle.
+            if zmena or (zmena_smeru and self._stav is Stav.RYCHLE_LISTOVANI):
+                self._zadej_prekresleni()
 
     def _zpet_do_cteni(self):
         if self._konec or not self._stranky:
@@ -535,6 +573,7 @@ class Ctecka:
         if self._konec or self._stav is not Stav.CTENI or not self._stranky:
             return False
         self._puvodni_stranka = self._stranka
+        self._smer_listovani = 0
         self._stav = Stav.RYCHLE_LISTOVANI
         self._zadej_prekresleni()
         return True
@@ -543,6 +582,7 @@ class Ctecka:
         if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
             return False
         self._stranka = self._puvodni_stranka
+        self._smer_listovani = 0
         self._stav = Stav.CTENI
         self._zadej_prekresleni()
         return True
@@ -551,6 +591,7 @@ class Ctecka:
         if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
             return False
         self._stav = Stav.CTENI
+        self._smer_listovani = 0
         if self._stranka != self._puvodni_stranka:
             self._pozice_k_ulozeni = (self._kniha, self._stranka)
         self._puvodni_stranka = self._stranka
