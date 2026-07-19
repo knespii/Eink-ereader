@@ -135,10 +135,15 @@ def uloz_pozici(kniha, stranka):
     _zapis_json_atomicky(SOUBOR_POZIC, pozice)
 
 
-def nacti_stranky(nazev, fonty):
+def nacti_stranky(nazev, fonty, hlas=None):
     """Vrátí stránkování knihy — z cache, nebo ho spočítá a uloží.
 
     `nazev` je cesta relativní ke složce knih ("kniha.epub" i "slozka/kniha.epub").
+
+    `hlas` je volitelné callable(podil) s podílem 0→1 za **celé** načtení.
+    Obě fáze dostanou půlku škály: parsování EPUBu 0→0,5, stránkování 0,5→1.
+    Dělí se napůl schválně, i když poměr časů se kniha od knihy liší — ukazatel
+    má dát najevo, že se něco děje, ne měřit čas do sekundy.
     """
     cesta = _bezpecna_cesta(nazev)
     klic = zpracovani_textu.klic_cache(
@@ -151,9 +156,20 @@ def nacti_stranky(nazev, fonty):
         return stranky
 
     logging.info("Stránkuji %s, poprvé to chvíli potrvá...", nazev)
-    obsah = zpracovani_epub.nacti_epub_obsah(cesta)
+
+    def faze(od, do):
+        """Přepočte podíl dílčí fáze na úsek celkové škály."""
+        if hlas is None:
+            return None
+        return lambda podil: hlas(od + (do - od) * podil)
+
+    obsah = zpracovani_epub.nacti_epub_obsah(cesta, hlas=faze(0.0, 0.5))
     stranky = zpracovani_textu.zformatuj_a_rozdel(
-        obsah, fonty.text, vykresleni.TEXT_SIRKA, vykresleni.TEXT_VYSKA
+        obsah,
+        fonty.text,
+        vykresleni.TEXT_SIRKA,
+        vykresleni.TEXT_VYSKA,
+        hlas=faze(0.5, 1.0),
     )
     if stranky:
         zpracovani_textu.uloz_do_cache(klic, stranky)
@@ -178,17 +194,21 @@ def nacti_obrazek_knihy(nazev):
     return nacti
 
 
-def obsluz(ctecka, fonty):
+def obsluz(ctecka, fonty, hlas=None):
     """Vyřídí, co si stav vyžádal: načte knihu a uloží pozici.
 
     Tohle je ta drahá práce, která nesmí běžet v callbacku tlačítka. Na Pi ji
     volá hlavní smyčka, v simulátoru obsluha HTTP požadavku.
+
+    `hlas` je volitelné callable(podil) volané během načítání. Vykreslování si
+    obstará volající — tenhle modul o displejích nic neví a vědět nesmí, jinak
+    by se rozešel se simulátorem, který žádný OLED nemá.
     """
     nazev = ctecka.vyzvedni_pozadavek()
     if nazev and not ctecka.konec:
         ctecka.dodej_stranky(
             nazev,
-            nacti_stranky(nazev, fonty),
+            nacti_stranky(nazev, fonty, hlas=hlas),
             nacti_pozice().get(nazev, 0),
         )
 

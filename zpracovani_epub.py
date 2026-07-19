@@ -30,7 +30,13 @@ warnings.filterwarnings('ignore')
 BLOKOVE_TAGY = ['p', 'div']
 
 
-def nacti_epub_obsah(cesta_k_souboru):
+def nacti_epub_obsah(cesta_k_souboru, hlas=None):
+    """EPUB → seznam bloků v pořadí čtení.
+
+    `hlas` je volitelné callable(podil), kde podil roste 0→1 po kapitolách.
+    Slouží k hlášení postupu ven; tenhle modul netuší, kdo ho poslouchá, takže
+    o displeji ani stavu nemusí vědět nic.
+    """
     try:
         kniha = epub.read_epub(cesta_k_souboru)
 
@@ -39,9 +45,12 @@ def nacti_epub_obsah(cesta_k_souboru):
             v_archivu = set(archiv.namelist())
 
         obsah = []
+        kapitol = max(1, len(kniha.spine))
         # Pořadí čtení určuje spine, ne manifest. get_items() vrací položky tak,
         # jak jsou zapsané v manifestu, což u řady knih není pořadí kapitol.
-        for idref, _linear in kniha.spine:
+        for poradi, (idref, _linear) in enumerate(kniha.spine):
+            if hlas:
+                hlas(poradi / kapitol)
             polozka = kniha.get_item_with_id(idref)
             if polozka is None or polozka.get_type() != ebooklib.ITEM_DOCUMENT:
                 continue

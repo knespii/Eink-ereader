@@ -37,6 +37,10 @@ _IKONA_SIRKA = 16  # sloupec pro ikonu; text začíná až za ním
 _TEXT_X = _IKONA_X + _IKONA_SIRKA + 4
 _MEZERA_TICKERU = 16  # prodleva mezi koncem a novým začátkem u dlouhého názvu
 
+# Ukazatel postupu knihy na úplném spodku. Text řádku sahá po y=21, takže
+# 3 px na dně zbývají volné a nemůže se s ním potkat.
+VYSKA_UKAZATELE = 3
+
 # --- FONTY ---
 
 FONT_TEXT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -150,19 +154,28 @@ def vykresli_oled(snimek, fonty=None, faze=0):
             f"{snimek.cislo_stranky}/{snimek.pocet_stranek}",
             faze,
         )
+        # Až po _radek(): ticker vkládá posouvaný pruh přes celou výšku, takže
+        # ukazatel nakreslený dřív by se v jeho sloupcích smazal.
+        if snimek.pocet_stranek > 0:
+            # Z čísla stránky (1..N), ne z indexu — jinak by poslední stránka
+            # nikdy nevyšla na plnou šířku a kniha vypadala nedočtená.
+            _ukazatel_postupu(obraz, snimek.cislo_stranky / snimek.pocet_stranek)
     else:
         _menu(obraz, fonty, snimek, faze)
 
     return obraz
 
 
-def vykresli_hlaseni(text, fonty=None):
+def vykresli_hlaseni(text, fonty=None, podil=None):
     """Prázdný displej s jedním vodorovně i svisle vycentrovaným řádkem.
 
     Určeno pro hlášky, které se musí objevit okamžitě a nezávisle na stavu —
     typicky „Načítám…" těsně před parsováním EPUBu, které na Pi Zero W trvá
     ~16 s. Bez toho by displej celou tu dobu ukazoval starý obsah a čtečka
     působila zaseknutě.
+
+    `podil` (0–1) přikreslí pod text ukazatel postupu. Bez něj se hláška
+    vykreslí samotná — ne každá hláška má co měřit.
     """
     if fonty is None:
         fonty = nacti_fonty()
@@ -171,6 +184,9 @@ def vykresli_hlaseni(text, fonty=None):
     kresli = ImageDraw.Draw(obraz)
     x = max(OKRAJ, (SIRKA - _sirka(kresli, text, fonty.text)) // 2)
     _text_vlevo(kresli, text, fonty.text, x, _STRED_Y)
+
+    if podil is not None:
+        _ukazatel_postupu(obraz, podil)
     return obraz
 
 
@@ -201,6 +217,25 @@ def _menu(obraz, fonty, snimek, faze):
         pocitadlo = f"{index + 1 - posun}/{len(polozky) - posun}"
 
     _radek(obraz, fonty, _IKONY_POLOZEK.get(polozka.typ, IKONA_KNIHA), nazev, pocitadlo, faze)
+
+
+def _ukazatel_postupu(obraz, podil):
+    """Vodorovná čára na dně displeje, dlouhá `podil` (0–1) šířky displeje.
+
+    Používá se dvakrát: při čtení jako postup v knize, pod hláškou „Načítám…"
+    jako postup parsování.
+
+    Rozlišení je hrubé: 128 px na knihu o 1465 stranách znamená, že se čára
+    hne jednou za ~11 stránek. Jde o hrubou orientaci, ne o měřidlo — přesné
+    číslo je při čtení vedle v počítadle.
+    """
+    podil = min(1.0, max(0.0, podil))
+    # Aspoň 1 px, jakmile se vůbec začalo — nulová čára vypadá jako rozbitý
+    # displej, ne jako začátek.
+    sirka = max(1, round(SIRKA * podil))
+
+    kresli = ImageDraw.Draw(obraz)
+    kresli.rectangle((0, VYSKA - VYSKA_UKAZATELE, sirka - 1, VYSKA - 1), fill=255)
 
 
 def _radek(obraz, fonty, ikona, nazev, pocitadlo, faze):

@@ -61,6 +61,11 @@ RYCHLOST_TICKERU = 40.0
 # začátek dřív, než ho oko stihne přečíst.
 PRODLEVA_TICKERU = 1.0
 
+# Nejkratší rozestup mezi překresleními ukazatele během načítání knihy. Parser
+# hlásí postup tisíckrát za knihu; bez omezení by samotné kreslení a zápis na
+# I2C načítání znatelně prodloužily.
+PERIODA_HLASENI = 0.1
+
 # Jak často se přehledává složka s knihami. Dřív se skenovalo při každém
 # průchodu, což by při TIK_MENU 0,08 s znamenalo dvanáct výpisů adresáře
 # za sekundu.
@@ -87,6 +92,27 @@ def zobraz(obrazovka, ctecka, fonty):
     # jen odsud, takže posledni_stav.json pořád popisuje obraz na e-inku —
     # menu na OLEDu do něj nezasahuje, protože OLED je po zapnutí stejně prázdný.
     knihovna.uloz_posledni_stav(snimek)
+
+
+def hlas_nacitani(oled, perioda=PERIODA_HLASENI):
+    """Vrátí callback pro knihovna.obsluz(), který kreslí postup na OLED.
+
+    Parser ho volá po každé kapitole a stránkování po každém bloku, což je u
+    velké knihy tisíckrát za načtení. Překreslovat tolikrát by parsování jen
+    prodloužilo, takže se propustí nejvýš jedno překreslení za `perioda`
+    sekund. Poslední hlášený podíl se dokreslí až tím dalším povoleným — na
+    hrubém ukazateli širokém 128 px se to nepozná.
+    """
+    posledni = [0.0]
+
+    def hlas(podil):
+        ted = time.monotonic()
+        if ted - posledni[0] < perioda:
+            return
+        posledni[0] = ted
+        oled.hlaseni("Načítám…", podil)
+
+    return hlas
 
 
 def faze_tickeru(polozka_od, ted=None):
@@ -122,14 +148,16 @@ class VystupOled:
         self._zarizeni.display(obraz)
         return True
 
-    def hlaseni(self, text):
+    def hlaseni(self, text, podil=None):
         """Okamžitě promaže displej a vypíše vycentrovanou hlášku.
+
+        `podil` (0–1) přikreslí pod text ukazatel postupu.
 
         Obchází porovnání s posledním obrazem — hláška se musí objevit i
         tehdy, když by shodou okolností vyšla stejně jako to, co už na
         displeji je.
         """
-        obraz = oled_ui.vykresli_hlaseni(text, self._fonty)
+        obraz = oled_ui.vykresli_hlaseni(text, self._fonty, podil)
         self._posledni = obraz.tobytes()
         self._zarizeni.display(obraz)
 
@@ -275,8 +303,10 @@ def main():
             # smyčka pustí, dostane uživatel odezvu: parsování a stránkování
             # knihy trvá na Pi Zero W ~16 s a po tu dobu se smyčka nevrátí.
             if ctecka.snimek().nacita_se:
-                oled.hlaseni("Načítám…")
-            knihovna.obsluz(ctecka, fonty)
+                oled.hlaseni("Načítám…", 0.0)
+                knihovna.obsluz(ctecka, fonty, hlas=hlas_nacitani(oled))
+            else:
+                knihovna.obsluz(ctecka, fonty)
 
             # Nové knihy a složky se tím ukážou samy, bez restartu. Skenuje se
             # po PERIODA_SKENU, ne při každém průchodu: v menu se smyčka točí

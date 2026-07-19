@@ -44,7 +44,14 @@ def vyska_radku(font, rozestup_radku=ROZESTUP_RADKU):
     return ascent + descent + rozestup_radku
 
 
-def zformatuj_a_rozdel(obsah, font, max_sirka_px, max_vyska_px, rozestup_radku=ROZESTUP_RADKU):
+def zformatuj_a_rozdel(
+    obsah, font, max_sirka_px, max_vyska_px, rozestup_radku=ROZESTUP_RADKU, hlas=None
+):
+    """Bloky → stránky. `hlas` je volitelné callable(podil) rostoucí 0→1.
+
+    Volá se po každém zpracovaném bloku. Případné omezení frekvence si řeší
+    volající — tenhle modul neví, jak drahé je jeho zpracování.
+    """
     stranky = []
     radky = []
     radku_na_stranku = max(1, max_vyska_px // vyska_radku(font, rozestup_radku))
@@ -60,7 +67,11 @@ def zformatuj_a_rozdel(obsah, font, max_sirka_px, max_vyska_px, rozestup_radku=R
             stranky.append({"typ": "text", "obsah": list(radky)})
             radky.clear()
 
-    for polozka in obsah:
+    bloku = max(1, len(obsah))
+    for poradi, polozka in enumerate(obsah):
+        if hlas:
+            hlas(poradi / bloku)
+
         if polozka["typ"] == "obrazek":
             if radky:
                 stranky.append({"typ": "text", "obsah": list(radky)})

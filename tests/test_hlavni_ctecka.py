@@ -352,7 +352,9 @@ def bezici_smycka(monkeypatch):
     monkeypatch.setattr(h.oled_ui, "vytvor_oled", lambda *a, **kw: OledAtrapa())
     monkeypatch.setattr(h.displej, "vytvor_displej", EinkAtrapa)
     monkeypatch.setattr(h.knihovna, "nacti_strom", lambda: STROM_ATRAPA)
-    monkeypatch.setattr(h.knihovna, "nacti_stranky", lambda nazev, fonty: STRANKY_ATRAPA)
+    monkeypatch.setattr(
+        h.knihovna, "nacti_stranky", lambda nazev, fonty, hlas=None: STRANKY_ATRAPA
+    )
     monkeypatch.setattr(h.knihovna, "nacti_posledni_stav", lambda: None)
 
     # main() si Ctecku vyrábí sám; tudy se k ní dostaneme, abychom ji na konci
@@ -479,10 +481,12 @@ class TestHlaseniNacitani:
         monkeypatch.setattr(
             h.knihovna,
             "nacti_stranky",
-            lambda nazev, fonty: poradi.append("parsovani") or STRANKY_ATRAPA,
+            lambda nazev, fonty, hlas=None: poradi.append("parsovani") or STRANKY_ATRAPA,
         )
         monkeypatch.setattr(
-            h.VystupOled, "hlaseni", lambda self, text: poradi.append("hlaseni")
+            h.VystupOled,
+            "hlaseni",
+            lambda self, text, podil=None: poradi.append("hlaseni"),
         )
 
         krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # ze složky na knihu
@@ -577,3 +581,158 @@ class TestScrollovaniNazvu:
             for faze in range(0, 60, 4)
         }
         assert len(obrazy) == 1
+
+
+class TestUkazatelPostupu:
+    """Vodorovná čára na dně OLEDu ukazuje, jak daleko je kniha přečtená."""
+
+    POCET = 120
+
+    def _snimek(self, stranka, pocet=None):
+        pocet = pocet or self.POCET
+        c = Ctecka(["Duna.epub"])
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("Duna.epub", [{"typ": "text", "obsah": ["x"]}] * pocet, stranka)
+        return c.snimek()
+
+    def _delka(self, obraz):
+        pole = obraz.load()
+        y = h.oled_ui.VYSKA - 1
+        return max((x for x in range(obraz.width) if pole[x, y]), default=-1) + 1
+
+    @pytest.mark.parametrize(
+        "stranka, ocekavano",
+        [(0, 1), (29, 32), (59, 64), (89, 96), (119, 128)],
+    )
+    def test_delka_odpovida_podilu(self, stranka, ocekavano):
+        fonty = h.oled_ui.nacti_fonty()
+        obraz = h.oled_ui.vykresli_oled(self._snimek(stranka), fonty)
+        assert self._delka(obraz) == ocekavano
+
+    def test_posledni_stranka_je_plna_sirka(self):
+        fonty = h.oled_ui.nacti_fonty()
+        obraz = h.oled_ui.vykresli_oled(self._snimek(self.POCET - 1), fonty)
+        assert self._delka(obraz) == h.oled_ui.SIRKA
+
+    def test_prvni_stranka_neni_neviditelna(self):
+        """Nulová čára vypadá jako rozbitý displej, ne jako začátek knihy."""
+        fonty = h.oled_ui.nacti_fonty()
+        obraz = h.oled_ui.vykresli_oled(self._snimek(0, pocet=1465), fonty)
+        assert self._delka(obraz) >= 1
+
+    def test_nezasahuje_do_textu(self):
+        fonty = h.oled_ui.nacti_fonty()
+        obraz = h.oled_ui.vykresli_oled(self._snimek(59), fonty)
+        pole = obraz.load()
+        mezera = h.oled_ui.VYSKA - h.oled_ui.VYSKA_UKAZATELE
+        assert not any(pole[x, mezera - 1] for x in range(obraz.width))
+
+    def test_prezije_posun_tickeru(self):
+        """Ticker vkládá pruh přes celou výšku — ukazatel se musí kreslit až po něm."""
+        dlouhy = "Velmi dlouhy nazev knihy ktery se na displej nevejde.epub"
+        c = Ctecka([dlouhy])
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky(dlouhy, [{"typ": "text", "obsah": ["x"]}] * 100, 49)
+        fonty = h.oled_ui.nacti_fonty()
+
+        delky = {
+            self._delka(h.oled_ui.vykresli_oled(c.snimek(), fonty, faze))
+            for faze in (0, 20, 80, 200)
+        }
+        assert delky == {64}
+
+    @pytest.mark.parametrize("popis", ["menu", "nacitani"])
+    def test_mimo_cteni_se_nekresli(self, popis):
+        c = Ctecka(["a.epub"])
+        if popis == "nacitani":
+            c.akce()
+        obraz = h.oled_ui.vykresli_oled(c.snimek(), h.oled_ui.nacti_fonty())
+        assert self._delka(obraz) == 0
+
+
+class TestPostupNacitani:
+    """Parsování blokuje smyčku ~16 s. Ukazatel pod hláškou dává najevo,
+    že se něco děje a kde v tom čtečka je."""
+
+    def _delka(self, obraz):
+        pole = obraz.load()
+        y = h.oled_ui.VYSKA - 1
+        return max((x for x in range(obraz.width) if pole[x, y]), default=-1) + 1
+
+    def test_hlaseni_bez_podilu_ukazatel_nekresli(self):
+        obraz = h.oled_ui.vykresli_hlaseni("Načítám…", h.oled_ui.nacti_fonty())
+        assert self._delka(obraz) == 0
+
+    @pytest.mark.parametrize("podil, ocekavano", [(0.0, 1), (0.25, 32), (0.5, 64), (1.0, 128)])
+    def test_hlaseni_s_podilem_kresli_ukazatel(self, podil, ocekavano):
+        obraz = h.oled_ui.vykresli_hlaseni("Načítám…", h.oled_ui.nacti_fonty(), podil)
+        assert self._delka(obraz) == ocekavano
+
+    def test_hlas_omezuje_frekvenci(self):
+        """Parser hlásí tisíckrát za knihu; kreslit tolikrát by načítání zdrželo."""
+        volani = []
+        oled = type("Atrapa", (), {"hlaseni": lambda self, t, p=None: volani.append(p)})()
+        hlas = h.hlas_nacitani(oled, perioda=10.0)
+
+        for i in range(1000):
+            hlas(i / 1000)
+
+        assert len(volani) <= 2, f"prošlo {len(volani)} překreslení, čekal nejvýš 2"
+
+    def test_hlas_pusti_dalsi_az_po_periode(self):
+        volani = []
+        oled = type("Atrapa", (), {"hlaseni": lambda self, t, p=None: volani.append(p)})()
+        hlas = h.hlas_nacitani(oled, perioda=0.05)
+
+        hlas(0.1)
+        time.sleep(0.06)
+        hlas(0.9)
+
+        assert volani == [0.1, 0.9]
+
+    def test_obsluz_predava_hlas_dal(self, monkeypatch):
+        """knihovna.obsluz() musí hlas propustit až do stránkování."""
+        dostal = []
+        monkeypatch.setattr(
+            h.knihovna,
+            "nacti_stranky",
+            lambda nazev, fonty, hlas=None: dostal.append(hlas) or STRANKY_ATRAPA,
+        )
+        c = Ctecka(["a.epub"])
+        c.akce()
+        znacka = object()
+        h.knihovna.obsluz(c, None, hlas=znacka)
+        assert dostal == [znacka]
+
+    def test_obsluz_funguje_i_bez_hlasu(self, monkeypatch):
+        """Simulátor volá obsluz() bez hlasu a žádný OLED nemá."""
+        monkeypatch.setattr(
+            h.knihovna, "nacti_stranky", lambda nazev, fonty, hlas=None: STRANKY_ATRAPA
+        )
+        c = Ctecka(["a.epub"])
+        c.akce()
+        h.knihovna.obsluz(c, None)
+        assert c.snimek().stav is Stav.CTENI
+
+
+class TestHlasVeStrankovani:
+    def test_zformatuj_hlasi_postup(self, fonty):
+        import zpracovani_textu
+
+        podily = []
+        obsah = [{"typ": "text", "hodnota": f"odstavec {i}"} for i in range(20)]
+        zpracovani_textu.zformatuj_a_rozdel(
+            obsah, fonty.text, 400, 800, hlas=podily.append
+        )
+
+        assert podily, "hlas se nezavolal ani jednou"
+        assert podily == sorted(podily), "podíl klesá"
+        assert 0.0 <= min(podily) and max(podily) < 1.0
+
+    def test_zformatuj_funguje_bez_hlasu(self, fonty):
+        import zpracovani_textu
+
+        obsah = [{"typ": "text", "hodnota": "nejaky text"}]
+        assert zpracovani_textu.zformatuj_a_rozdel(obsah, fonty.text, 400, 800)

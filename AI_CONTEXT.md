@@ -140,7 +140,8 @@ ctecka/
 - `nacti_seznam_knih()` → ploché **relativní cesty** všech knih; slouží už jen k ověření, že kniha z `posledni_stav.json` pořád existuje.
 - `nacti_pozice()`, `uloz_pozici(kniha, stranka)`, `nacti_stranky(nazev, fonty)`, `nacti_obrazek_knihy(nazev)` — `nazev` je všude **relativní cesta** (`"kniha.epub"` i `"slozka/kniha.epub"`).
 - `_bezpecna_cesta(relativni)` — ověří, že cesta nevede ven ze `SLOZKA_KNIH`. Cesty se ukládají do JSONu, takže ručně upravený soubor by přes `..` jinak otevřel cokoli na disku.
-- `obsluz(ctecka, fonty)` — vyřídí požadavek na načtení a zápis pozice. Volá ji hlavní smyčka i simulátor.
+- `obsluz(ctecka, fonty, hlas=None)` — vyřídí požadavek na načtení a zápis pozice. Volá ji hlavní smyčka i simulátor.
+- **Hlášení postupu:** `hlas` je volitelné `callable(podil)` s podílem 0→1, které `nacti_stranky()` propouští do obou fází — `zpracovani_epub.nacti_epub_obsah(hlas=)` dostane úsek 0–0,5 (hlásí po kapitolách), `zpracovani_textu.zformatuj_a_rozdel(hlas=)` úsek 0,5–1 (hlásí po blocích). Dělí se napůl schválně; poměr časů se kniha od knihy liší, ale ukazatel má dát najevo, že se něco děje, ne měřit čas. **Callback, ne kreslení uvnitř:** knihovna o displejích nesmí vědět, jinak by se rozešla se simulátorem, který žádný OLED nemá. Na reálné knize (1465 stran) se `hlas` zavolá ~3900×.
 - `uloz_posledni_stav(snimek)` / `nacti_posledni_stav()` / `obnov_posledni_stav(ctecka, fonty)`.
 - `_zapis_json_atomicky(cesta, data)` — tmp + `fsync` + `os.replace`.
 - Cesty se odvozují od `__file__`, **ne** od CWD (jinak by čtečka ze systemd nenašla knihy).
@@ -152,6 +153,9 @@ ctecka/
 - FontAwesome se hledá ve třech cestách, první existující vyhrává: `fonts/FontAwesome.ttf` (odvozeno od `__file__`), pak dvě systémové. Když chybí, `ikony_jsou=False` a kreslí se náhradní ASCII (`[]`, `*`, `<-`) — menu zůstane čitelné.
 - Ikony jsou kódy z **privátní oblasti FontAwesome 4** (`` složka, `` kniha, `` zpět, `` načítání, `` chyba, `` prázdno), zapsané escapem schválně. **V FA 5 a novějších se liší** — proto je vendorovaná právě 4.7.0.
 - **Ticker:** název delší než pruh se posouvá podle `faze`, vykreslený dvakrát za sebou, aby přetočení najelo plynule. Kreslí se do vlastního pruhu a vkládá zpět, jinak by přetekl přes počítadlo. Přípona `.epub` se odřezává — na 128 px se počítá každý pixel.
+- **Ukazatel postupu** `_ukazatel_postupu(obraz, podil)` — vodorovná čára na spodních 3 px (`VYSKA_UKAZATELE`) dlouhá `podil × SIRKA`, minimálně 1 px (nulová čára vypadá jako rozbitý displej). Používá se dvakrát: při `CTENI` jako postup v knize (`cislo_stranky / pocet_stranek` — z čísla stránky 1..N, ne z indexu, jinak by poslední stránka nikdy nevyšla na plnou šířku) a pod hláškou „Načítám…" jako postup parsování. Rozlišení je hrubé, u knihy o 1465 stranách se čára hne jednou za ~11 stránek.
+- `vykresli_hlaseni(text, fonty, podil=None)` — vycentrovaná hláška; s `podil` přikreslí pod ni ukazatel.
+- **Pořadí kreslení je závazné:** ukazatel se kreslí **až po** `_radek()`. Ticker vkládá posouvaný pruh přes celou výšku obrázku, takže dřív nakreslená čára by se v jeho sloupcích smazala. Hlídá to `test_prezije_posun_tickeru`.
 - `vytvor_oled(port=1, adresa=0x3C)` — lazy import `luma.oled`; když knihovna, I2C nebo panel chybí, vrátí `_DummyOled` a čtečka běží dál.
 
 ## `zpracovani_epub.py` — parser
@@ -173,7 +177,8 @@ ctecka/
 - Kodér u OLEDu (BCM): `PIN_ENKODER_CLK = 5`, `PIN_ENKODER_DT = 6`, `PIN_ENKODER_SW = 13`. OLED na I2C: BCM 2 (SDA) a 3 (SCL).
 - Krátký stisk visí na **`when_released`** (s vlajkou `drzeno`) — jinak by dlouhý stisk nejdřív otevřel knihu.
 - `pripoj_enkoder()` obaluje všechny tři callbacky kontrolou `Stav.MENU`. Chybějící kodér se odchytí a jen zaloguje — menu pak jede na tlačítkách.
-- `VystupOled` porovnává vykreslený obraz s posledním odeslaným a shodný na I2C neposílá. Bez toho by krátký název při 0,15s tiku znamenal 7 zápisů za sekundu pro nic.
+- `VystupOled` porovnává vykreslený obraz s posledním odeslaným a shodný na I2C neposílá. Bez toho by krátký název při 0,15s tiku znamenal 7 zápisů za sekundu pro nic. `hlaseni(text, podil)` tohle porovnání obchází — hláška se musí objevit vždy.
+- `hlas_nacitani(oled)` vrací callback pro `knihovna.obsluz()`, který během parsování překresluje ukazatel, ale nejvýš jednou za `PERIODA_HLASENI = 0.1` s. Parser hlásí tisíckrát za knihu; kreslit tolikrát by načítání znatelně prodloužilo.
 - Časování: `TIK_MENU = 0.08` (kvůli plynulému tickeru, ~12,5 snímku/s), `TIK_CTENI = 1.0`, `PERIODA_SKENU = 2.0`.
 - **Ticker jede podle hodin, ne podle tiků.** `faze_tickeru(polozka_od)` počítá posun z `time.monotonic()`: `RYCHLOST_TICKERU = 40` px/s po prodlevě `PRODLEVA_TICKERU = 1.0` s. Kdyby se fáze zvyšovala o konstantu na každý průchod, zdržel by ji sken složky nebo zápis pozice a text by se viditelně trhal. `time.sleep()` se nepoužívá nikde — čeká se na `threading.Condition`, takže cvaknutí kodéru smyčku probudí okamžitě.
 - Posouvá se **jen název**. Ikona a počítadlo leží mimo posouvaný pruh (`_text_ticker()` kreslí do vlastního obrázku a vkládá ho zpět), takže se nemůžou hnout ani probliknout. Hlídá to `TestScrollovaniNazvu`.
