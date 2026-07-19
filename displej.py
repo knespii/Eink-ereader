@@ -68,12 +68,23 @@ _CMD_NACTI_LUT = 0x22
 _CMD_OBNOV = 0x20
 
 
+# Převodní tabulka pro inverzi bajtu (~b & 0xFF == 255 - b). bytes.translate()
+# ji zpracuje v C; list comprehension přes 58 080 bajtů stojí na Pi Zero W
+# skoro desetinu sekundy navíc.
+_INVERZE = bytes(255 - i for i in range(256))
+
+
 def _posli_blok(epd, cfg, prikaz, data):
-    """Příkaz a k němu celý datový blok jediným hromadným SPI přenosem."""
+    """Příkaz a k němu celý datový blok jediným hromadným SPI přenosem.
+
+    Data se předávají jako bytes, ne jako list. Původní list(data) vyrobil
+    58 080 pythonovských intů na vrstvu, což je na Pi Zero W měřitelné čekání
+    navíc a spidev si s bytes poradí sám.
+    """
     epd.send_command(prikaz)
     cfg.digital_write(epd.dc_pin, 1)
     cfg.digital_write(epd.cs_pin, 0)
-    cfg.spi_writebyte2(list(data))
+    cfg.spi_writebyte2(data if isinstance(data, (bytes, bytearray)) else list(data))
     cfg.digital_write(epd.cs_pin, 1)
 
 
@@ -91,7 +102,7 @@ def rychle_zobraz(epd, cfg, cerna_buf, cervena_buf):
     epd.send_data(0xAF)
     _posli_blok(epd, cfg, _CMD_CERNA, cerna_buf)
     # Červená vrstva se do panelu posílá invertovaná (viz display(): ~imagered).
-    _posli_blok(epd, cfg, _CMD_CERVENA, [~b & 0xFF for b in cervena_buf])
+    _posli_blok(epd, cfg, _CMD_CERVENA, bytes(cervena_buf).translate(_INVERZE))
     _obnov_a_cekej(epd, cfg)
 
 
@@ -100,8 +111,8 @@ def rychle_vycisti(epd, cfg):
     bajtu = int(epd.width * epd.height / 8)
     epd.send_command(_CMD_NASTAV)
     epd.send_data(0xAF)
-    _posli_blok(epd, cfg, _CMD_CERNA, [0xFF] * bajtu)
-    _posli_blok(epd, cfg, _CMD_CERVENA, [0x00] * bajtu)
+    _posli_blok(epd, cfg, _CMD_CERNA, b"\xff" * bajtu)
+    _posli_blok(epd, cfg, _CMD_CERVENA, b"\x00" * bajtu)
     _obnov_a_cekej(epd, cfg)
 
 
@@ -126,9 +137,27 @@ class WaveshareDriver(Displej):
             hasattr(self._epd, a) for a in ("dc_pin", "cs_pin", "send_command", "ReadBusy")
         )
 
+    def _buffer(self, obraz):
+        """Zabalí obraz do bufferu panelu, ale rychle.
+
+        epd.getbuffer() prochází všech 464 640 pixelů v Pythonu a na Pi Zero W
+        stojí 1,7 s na vrstvu, tedy 3,4 s čekání před každou stránkou. Pro
+        obraz, který už má rozměr panelu a mode "1", dělá přesně to, co PIL
+        umí v C: balení po bitech MSB napřed, řádek po řádku. Panel je široký
+        880 px, což je 110 celých bajtů, takže se řádky nikde nedoplňují a
+        výsledek vychází bajtově shodně (ověřeno na testovacích vzorech proti
+        doslovnému přepisu původní smyčky).
+
+        Jiný rozměr nebo mode nechávám ovladači — ten si obraz sám otočí a
+        tuhle zkratku by rozbil.
+        """
+        if obraz.mode == "1" and obraz.size == (self._epd.width, self._epd.height):
+            return obraz.tobytes()
+        return self._epd.getbuffer(obraz)
+
     def zobraz(self, cerna, cervena):
-        cerna_buf = self._epd.getbuffer(cerna.rotate(90, expand=True))
-        cervena_buf = self._epd.getbuffer(cervena.rotate(90, expand=True))
+        cerna_buf = self._buffer(cerna.rotate(90, expand=True))
+        cervena_buf = self._buffer(cervena.rotate(90, expand=True))
 
         self._epd.init()
         if self._zvladne_hromadne():

@@ -2,7 +2,7 @@
 
 DIY hardwarová **e-ink čtečka EPUB knih** na **Raspberry Pi Zero W** s displejem **Waveshare 7.5" HD (`epd7in5b_HD`, tříbarevný černá/bílá/červená, fyzicky 880×528 px)**. Součástí repozitáře je i **Flask simulátor**, který běží na **stejném kódu** jako produkce (ne jako zrcadlová kopie) a slouží k vývoji bez hardwaru.
 
-Ovládání je **hybridní**, protože refresh e-inku trvá ~10 s a listování knihovnou je tím nepoužitelné:
+Ovládání je **hybridní**, protože otočení stránky na e-inku trvá ~29 s (viz [PERFORMANCE]) a listování knihovnou je tím nepoužitelné:
 
 | Stav | Displej | Ovládání |
 |---|---|---|
@@ -53,11 +53,11 @@ Základní pravidlo: **stav, kreslení a hardware o sobě navzájem nevědí.** 
 - **Jediný zdroj pravdy:** `Ctecka` drží veškerý stav a je **thread-safe** (`threading.Condition`). Produkce i simulátor na ni sahají identicky; liší se jen vstup (GPIO vs. HTTP) a výstup (e-ink vs. PNG). Ověřeno testem, že web ukazuje **bajtově totéž**, co jde na panel.
 - **Snímek místo živého stavu:** `Ctecka.snimek()` vrací zmrazený `@dataclass(frozen=True) Snimek`. Vykreslování tak nemůže přečíst stav rozpůlený stiskem tlačítka.
 - **Drahá práce mimo callbacky:** stránkování trvá na Pi Zero W ~16 s. Callbacky gpiozero smějí **jen sáhnout na stav** (měřeno: 0,02 ms). Otevření knihy jde přes **požadavek**: `akce()` ho zaeviduje → hlavní smyčka `vyzvedni_pozadavek()` → parsuje → `dodej_stranky()`. Mezitím svítí `nacita_se`.
-- **Ochrana proti ztracenému překreslení:** `cekej_na_prekresleni()` shazuje vlajku **před** renderem, atomicky pod zámkem. Stisk během ~10s zápisu na e-ink se tak neztratí.
+- **Ochrana proti ztracenému překreslení:** `cekej_na_prekresleni()` shazuje vlajku **před** renderem, atomicky pod zámkem. Stisk během ~29s zápisu na e-ink se tak neztratí.
 - **Koalescence zápisů:** rychlé listování se slije do **jednoho** zápisu `progress.json` (šetří SD kartu).
 - **Rotace patří driveru:** `vykresleni.py` kreslí 528×880 na výšku; otočení o 90° do 880×528 dělá `WaveshareDriver`, protože to je vlastnost železa, ne knihy.
 - **Dva displeje, jeden snímek:** `MENU` kreslí jen na OLED, `CTENI` jen na e-ink. Oba renderery čtou tentýž `Snimek`, takže se nemůžou rozejít. Návrat z knihy do menu **e-ink nepřekresluje** — panel drží poslední stránku a funguje jako přirozená záložka. `posledni_stav.json` se zapisuje jen při zápisu na panel, takže pořád popisuje to, co je na něm vidět.
-- **Kodér mlčí při čtení:** callbacky kodéru jsou obalené kontrolou stavu. Cvrnknutí do kodéru během čtení by jinak spustilo desetisekundový refresh panelu.
+- **Kodér mlčí při čtení:** callbacky kodéru jsou obalené kontrolou stavu. Cvrnknutí do kodéru během čtení by jinak spustilo půlminutový refresh panelu.
 - **Lazy import ovladačů:** `waveshare_epd` se importuje až v konstruktoru `WaveshareDriver`, `luma.oled` až ve `vytvor_oled()` → zbytek jde spustit a testovat na desktopu. Chybějící železo se obejde atrapou, nesestřelí program.
 - **Hromadný SPI přenos:** viz [PERFORMANCE].
 
@@ -84,7 +84,7 @@ ctecka/
 ├── README.md                # dokumentace pro člověka
 ├── AI_CONTEXT.md            # tento soubor
 ├── fonts/                   # FontAwesome.ttf (4.7.0, OFL-1.1) + LICENSE-FontAwesome.txt
-├── tests/                   # 228 testů (pytest), bez hardwaru
+├── tests/                   # 267 testů (pytest), bez hardwaru
 │   ├── conftest.py          # autouse fixtury chránící progress.json a cache uživatele
 │   ├── test_stav.py, test_vykresleni.py, test_displej.py, test_knihovna.py
 │   ├── test_zpracovani_epub.py, test_zpracovani_textu.py
@@ -256,10 +256,33 @@ Naměřeno na Pi Zero W:
 |---|---|
 | Import modulů + vykreslení menu | 4,8 s |
 | `display()` původním ovladačem | ~99 s |
-| `display()` s hromadným přenosem | **~10 s** (budicí křivka panelu) |
 | `Clear()` | ~91 s |
 | Stránkování knihy (cache miss) | ~16 s |
 | Stránkování z cache | ihned |
+
+**Rozpad otočení stránky** (změřeno 19. 7. 2026 na Pi Zero W, `zobraz()` krok po kroku):
+
+| Fáze | Před | Po | Kde to je |
+|---|---|---|---|
+| `vykresli()` | 0,35 s | 0,35 s | `vykresleni.py` |
+| `rotate(90)` + buffer | **4,00 s** | **~0,1 s** | `WaveshareDriver._buffer()` |
+| inverze červené + `list(data)` | ~0,12 s | ~0,003 s | `rychle_zobraz()`, `_posli_blok()` |
+| `epd.init()` | 1,26 s | 1,26 s | ovladač |
+| přenos + budicí křivka panelu | 25,33 s | 25,33 s | hardware |
+| `epd.sleep()` | 2,00 s | 2,00 s | ovladač |
+| **celkem** | **~33 s** | **~29 s** | |
+
+**Ty 4 s byly `epd.getbuffer()`** — prochází všech 464 640 pixelů v Pythonu, 1,72 s na vrstvu. `WaveshareDriver._buffer()` to obchází přes `PIL.tobytes()` (0,04 s): panel je široký 880 px = 110 celých bajtů, takže se řádky nikde nedoplňují a balení MSB-napřed vychází bajtově shodně. Zkratka platí **jen** pro obraz o rozměru panelu a mode `"1"`; cokoli jiného jde dál přes `getbuffer()`, protože ovladač si to sám otáčí. Hlídá to `TestRychleBaleniBufferu` proti doslovnému přepisu původní smyčky, na bílém, černém, pruhovaném a náhodném vzoru — **bílý obraz sám nic nedokazuje**, tam obě cesty vyjdou jako samé `0xFF` bez ohledu na polaritu.
+
+**Dalších ~0,12 s** braly dvě pythonovské smyčky po bajtech: `[~b & 0xFF for b in cervena_buf]` (58 080 iterací) a `list(data)` u obou vrstev. Nahrazeno `bytes.translate(_INVERZE)` a předáváním `bytes` rovnou do `spi_writebyte2`.
+
+**Zbytek je hardware.** Po těchhle dvou opravách je veškerý Python v cestě pod 0,5 s. Rozdělení 25,33 s na přenos a budicí křivku bylo ověřeno na Pi — dominuje křivka, přenos 116 KB je zlomek. Přesná čísla toho rozpadu tady zapsaná nejsou.
+
+**Dřívější údaj „`display()` s hromadným přenosem ~10 s" neplatí** — naměřeno 25,33 s pro přenos i křivku dohromady. Odkud se vzalo těch 10 s, není jasné; ber tabulku výše jako platnou.
+
+**Nezměřeno / neuděláno:** `epd.init()` + `epd.sleep()` stojí 3,26 s na každou stránku. Vynechat `sleep()` mezi stránkami (nebo uspávat až po chvíli nečinnosti) by je ušetřilo, ale panel by zůstal pod napětím, před čímž Waveshare varuje kvůli DC bias.
+
+**Prefetching stránek nemá smysl.** `Ctecka._stranky` je běžný list s celou knihou v RAM; `dalsi()` + `snimek()` trvá 0,004 s. Předpočítávat bitmapy by ušetřilo 0,35 s z 29 s.
 
 **Proč byl původní `display()` pomalý:** ovladač posílá obraz po jednom bajtu — 116 160 volání `send_data()`, každé třikrát cvakne GPIO (~460 tisíc gpiozero operací). Samotný přenos 116 KB na 4 MHz trvá 0,23 s; brzdila obsluha pinů, ne panel ani SPI.
 
@@ -269,7 +292,7 @@ Naměřeno na Pi Zero W:
 
 **Částečné překreslení není možné** — červený pigment vyžaduje plnou budicí křivku přes celý panel. To je vlastnost hardwaru, ne kódu.
 
-**Proto vzniklo hybridní UI:** menu na e-inku znamenalo ~10 s na každý posun kurzoru. OLED se překreslí v jednotkách milisekund, takže knihovnou jde listovat plynule a e-ink zůstal jen na stránku textu, kde se stejně čeká.
+**Proto vzniklo hybridní UI:** menu na e-inku znamenalo ~29 s na každý posun kurzoru. OLED se překreslí v jednotkách milisekund, takže knihovnou jde listovat plynule a e-ink zůstal jen na stránku textu, kde se stejně čeká.
 
 **OLED zatím nebyl změřen na Pi Zero W.** Vykreslení 128×32 je řádově milisekundy a I2C přenos ~512 bajtů taky, ale čísla v téhle tabulce jsou z reálného měření, kdežto tohle je odhad — neber ho jako naměřený fakt.
 
@@ -279,7 +302,7 @@ Naměřeno na Pi Zero W:
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest          # 228 passed, 2 skipped
+.venv/bin/python -m pytest          # 267 passed, 2 skipped
 ```
 
 - **Bez hardwaru:** gpiozero jede na `MockFactory`, takže jde otestovat i dvouvteřinové držení tlačítka nebo kvadraturní sekvenci kodéru.
@@ -329,7 +352,7 @@ Správa služby: `sudo systemctl status ctecka`, `journalctl -u ctecka -f`, `sud
 - **Obálky knih se nezobrazují** — titulní strany bývají `<svg><image xlink:href>`, parser bere jen `<img>`.
 - **Cache se neuklízí** — soubory pro staré fonty a verze algoritmu zůstávají ležet (~0,75 MB na knihu a konfiguraci).
 - **Dlouhá slova se nedělí** — slovo širší než řádek (např. URL) přeteče.
-- **Otočení stránky trvá ~10 s** — strop daný panelem, viz [PERFORMANCE].
+- **Otočení stránky trvá ~29 s**, z toho ~25 s je přenos a budicí křivka panelu — strop daný hardwarem. Zbylé ~4 s jsou `epd.init()` a `epd.sleep()`. Viz [PERFORMANCE].
 - **Obnova po zapnutí předpokládá**, že panel drží poslední obraz. Kdyby se smazal, displej se srovná při prvním stisku.
 - **Vypnutí v menu probudí čtečku v knize** — `posledni_stav.json` popisuje e-ink, a ten drží poslední stránku. Návrat do menu je pak na tlačítku `PIN_AKCE`.
 - **Jen jedna úroveň složek.** Podsložka ve složce se ignoruje, knihy v ní jsou z menu nedostupné.

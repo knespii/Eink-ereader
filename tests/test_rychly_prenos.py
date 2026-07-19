@@ -186,3 +186,103 @@ class TestPojistka:
         driver._epd = epd
         driver._modul = type("M", (), {"epdconfig": cfg})
         assert driver._zvladne_hromadne() is True
+
+
+# --- RYCHLÉ BALENÍ BUFFERU ---
+
+SIRKA_PANELU, VYSKA_PANELU = 880, 528
+
+
+def getbuffer_referencni(image):
+    """Doslovný přepis větve "Horizontal" z epd7in5b_HD.getbuffer().
+
+    Slouží jako etalon: WaveshareDriver._buffer() tuhle smyčku obchází přes
+    PIL.tobytes(), protože v Pythonu stojí 1,7 s na vrstvu. Tady se drží
+    kontrakt, že obě cesty dávají tytéž bajty.
+    """
+    buf = [0xFF] * (SIRKA_PANELU // 8 * VYSKA_PANELU)
+    monochrom = image.convert("1")
+    pixely = monochrom.load()
+    for y in range(VYSKA_PANELU):
+        for x in range(SIRKA_PANELU):
+            if pixely[x, y] == 0:
+                buf[(x + y * SIRKA_PANELU) // 8] &= ~(0x80 >> (x % 8))
+    return bytes(b & 0xFF for b in buf)
+
+
+class _FakeEpdRozmery:
+    width, height = SIRKA_PANELU, VYSKA_PANELU
+
+    def __init__(self):
+        self.getbuffer_volan = 0
+
+    def getbuffer(self, obraz):
+        self.getbuffer_volan += 1
+        # Referenční smyčka je jen pro větev "Horizontal"; jiné rozměry si
+        # skutečný ovladač otáčí sám a tady stačí vědět, že se zavolal.
+        if obraz.mode == "1" and obraz.size == (self.width, self.height):
+            return getbuffer_referencni(obraz)
+        return b""
+
+
+def _driver_s_fake_epd():
+    """WaveshareDriver bez __init__ — ten importuje waveshare_epd, který na
+    desktopu není."""
+    d = displej.WaveshareDriver.__new__(displej.WaveshareDriver)
+    d._epd = _FakeEpdRozmery()
+    return d
+
+
+class TestRychleBaleniBufferu:
+    def _vzorky(self):
+        import random
+
+        from PIL import Image
+
+        bajtu = SIRKA_PANELU // 8 * VYSKA_PANELU
+        random.seed(20260719)
+        return [
+            ("bílý", Image.new("1", (SIRKA_PANELU, VYSKA_PANELU), 255)),
+            ("černý", Image.new("1", (SIRKA_PANELU, VYSKA_PANELU), 0)),
+            (
+                "svislé pruhy",
+                Image.frombytes(
+                    "1", (SIRKA_PANELU, VYSKA_PANELU), bytes([0b10101010]) * bajtu
+                ),
+            ),
+            (
+                "náhodný",
+                Image.frombytes(
+                    "1",
+                    (SIRKA_PANELU, VYSKA_PANELU),
+                    bytes(random.randrange(256) for _ in range(bajtu)),
+                ),
+            ),
+        ]
+
+    def test_bajtove_shodne_s_ovladacem(self):
+        """Bílý obraz sám o sobě nic nedokazuje — obě cesty na něm vyjdou 0xFF."""
+        driver = _driver_s_fake_epd()
+        for popis, obraz in self._vzorky():
+            assert driver._buffer(obraz) == getbuffer_referencni(obraz), popis
+
+    def test_zkratka_getbuffer_nevola(self):
+        driver = _driver_s_fake_epd()
+        _, obraz = self._vzorky()[3]
+        driver._buffer(obraz)
+        assert driver._epd.getbuffer_volan == 0
+
+    def test_jiny_rozmer_nechava_ovladaci(self):
+        """Neotočený obraz si musí otočit ovladač sám — zkratka by ho rozbila."""
+        from PIL import Image
+
+        driver = _driver_s_fake_epd()
+        driver._buffer(Image.new("1", (VYSKA_PANELU, SIRKA_PANELU), 255))
+        assert driver._epd.getbuffer_volan == 1
+
+    def test_jiny_mode_nechava_ovladaci(self):
+        from PIL import Image
+
+        driver = _driver_s_fake_epd()
+        driver._buffer(Image.new("L", (SIRKA_PANELU, VYSKA_PANELU), 255))
+        assert driver._epd.getbuffer_volan == 1
