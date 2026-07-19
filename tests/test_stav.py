@@ -175,12 +175,24 @@ class TestOtaceniStranek:
         ctecka.dalsi()
         assert ctecka.vyzvedni_pozici_k_ulozeni() is None
 
-    def test_navrat_do_menu_uvolni_pamet(self, ctecka):
+    def test_akce_pri_cteni_knihu_drzi(self, ctecka):
+        """Krátký stisk otevře menu nad rozečtenou knihou, aby se dlouhý stisk
+        měl kam vrátit. 2,8 MB u knihy o 1500 stranách za to stojí."""
         ctecka.akce()
+        s = ctecka.snimek()
+        assert s.stav is Stav.MENU
+        assert s.pocet_stranek == 5
+        assert ctecka.zpet_do_cteni() is True
+        assert ctecka.snimek().cislo_stranky == 3  # i se stránkou, kde jsi byl
+
+    def test_zpet_do_menu_uvolni_pamet(self, ctecka):
+        """Explicitní zavření knihy stránky pořád zahazuje."""
+        ctecka.zpet_do_menu()
         s = ctecka.snimek()
         assert s.stav is Stav.MENU
         assert s.pocet_stranek == 0
         assert s.kniha is None
+        assert ctecka.zpet_do_cteni() is False  # není kam se vracet
 
 
 def test_stisk_behem_renderu_se_neztrati():

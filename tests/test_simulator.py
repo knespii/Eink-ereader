@@ -26,11 +26,7 @@ def cerstva_ctecka(monkeypatch):
     def _nova():
         c = Ctecka(knihovna.nacti_seznam_knih())
         monkeypatch.setattr(simulator, "ctecka", c)
-        monkeypatch.setattr(
-            simulator,
-            "TLACITKA",
-            {"dalsi": c.dalsi, "predchozi": c.predchozi, "akce": c.akce},
-        )
+        monkeypatch.setattr(simulator, "TLACITKA", simulator.naveste_tlacitka(c))
         return c
 
     return _nova
@@ -200,6 +196,53 @@ class TestShodaSDisplejem:
             )
         )
         assert nesedi == 0
+
+
+class TestJedineTlacitkoCtecky:
+    """Web má na místě odstraněného PIN_AKCE prostřední tlačítko, které umí
+    krátký i dlouhý stisk. Kdyby se rozešlo s kodérem, simulátor by přestal
+    testovat produkci a začal testovat sám sebe — přesně to, co se už jednou
+    stalo (viz docstring simulator.py)."""
+
+    def test_kratky_stisk_pri_cteni_otevre_menu_a_nechá_knihu(
+        self, klient, cerstva_ctecka, kniha
+    ):
+        c = cerstva_ctecka()
+        klient.post("/api/stisk/akce")  # otevře knihu
+        assert c.snimek().stav is Stav.CTENI
+
+        klient.post("/api/stisk/akce")  # a zpátky do menu
+        assert c.snimek().stav is Stav.MENU
+        assert c.snimek().pocet_stranek > 0, "kniha se zahodila, escape nemá kam"
+
+    def test_dlouhy_stisk_vrati_do_knihy(self, klient, cerstva_ctecka, kniha):
+        c = cerstva_ctecka()
+        klient.post("/api/stisk/akce")
+        klient.post("/api/stisk/dalsi")  # na stránku 2
+        stranka = c.snimek().cislo_stranky
+        klient.post("/api/stisk/akce")  # do menu
+        assert c.snimek().stav is Stav.MENU
+
+        klient.post("/api/stisk/dlouhy_stisk")
+
+        assert c.snimek().stav is Stav.CTENI
+        assert c.snimek().cislo_stranky == stranka
+
+    def test_dlouhy_stisk_bez_knihy_nic_neudela(self, klient, cerstva_ctecka, kniha):
+        c = cerstva_ctecka()
+        r = klient.post("/api/stisk/dlouhy_stisk")
+        assert r.status_code == 200
+        assert c.snimek().stav is Stav.MENU
+
+    def test_stranka_zna_oba_stisky(self, klient):
+        """Endpointy bez tlačítka v HTML by nikdo nenamačkal."""
+        html = klient.get("/").get_data(as_text=True)
+        assert "'akce'" in html
+        assert "'dlouhy_stisk'" in html
+        assert str(int(hlavni_ctecka.DOBA_DRZENI_ENKODER * 1000)) in html
+
+    def test_neznama_udalost_je_404(self, klient):
+        assert klient.post("/api/stisk/neexistuje").status_code == 404
 
 
 class TestPozice:

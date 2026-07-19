@@ -136,10 +136,39 @@ journalctl -u ctecka -f           # živý log
 sudo systemctl disable --now ctecka   # zrušit autostart
 ```
 
-Čtečka nemá tlačítko na vypnutí — služba běží pořád a vypíná se odpojením
-napájení. E-ink drží obraz i bez proudu, takže se tím nic neztratí; jediné, oč
-přijdeš, je uspání panelu přes `epd.sleep()`. Po pádu (nenulový návrat) služba
-startuje znovu.
+Čtečka nemá tlačítko na vypnutí — vypíná se odpojením napájení, nebo se po
+hodině nečinnosti vypne sama (viz níže). E-ink drží obraz i bez proudu, takže
+se tím nic neztratí. Po pádu (nenulový návrat) služba startuje znovu.
+
+### Úspora energie
+
+Nečinnost se měří od posledního sáhnutí na hardware a má dvě fáze:
+
+| Po | Co se stane |
+|---|---|
+| 10 minutách | Zhasne OLED. Program běží dál, e-ink se nedotkne. |
+| 60 minutách | Čtečka se korektně ukončí a vypne celé Pi (`sudo halt`). |
+
+Ze spánku **první stisk nebo otočení jen rozsvítí** a svou akci neprovede —
+jinak by sáhnutí na tmavou čtečku otočilo stránku a čekalo by se ~29 s na
+refresh e-inku. Druhý vstup už funguje normálně.
+
+Aby druhá fáze prošla, potřebuje `halt` běžet bez hesla. Bez tohohle pravidla
+se vypnutí jen zaloguje jako chyba a čtečka běží dál:
+
+```bash
+echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/halt, /sbin/halt" \
+  | sudo tee /etc/sudoers.d/ctecka-halt
+sudo chmod 440 /etc/sudoers.d/ctecka-halt
+sudo -n halt --help >/dev/null && echo "pravidlo platí"   # kontrola bez vypnutí
+```
+
+Obě cesty schválně: sudo hledá příkaz podle `secure_path`, kde je `/usr/sbin`
+před `/sbin`, takže `sudo halt` se ve skutečnosti rozhodne pro `/usr/sbin/halt`.
+Pravidlo jen na `/sbin/halt` by se minulo a sudo by mlčky chtělo heslo.
+
+Prahy se dají přenastavit konstantami `DOBA_DO_SPANKU` a `DOBA_DO_VYPNUTI`
+v [`hlavni_ctecka.py`](hlavni_ctecka.py).
 
 ### Navázání tam, kde jsi skončil
 

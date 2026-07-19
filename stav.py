@@ -296,10 +296,11 @@ class Ctecka:
         self._posun(-1)
 
     def akce(self):
-        """Krátký stisk (nebo stisk kodéru).
+        """Krátký stisk tlačítka v kodéru — jediné potvrzovací tlačítko čtečky.
 
         V menu podle druhu položky: vstoupí do složky, vrátí se přes "..", nebo
-        otevře knihu. Při čtení se vrací do menu.
+        otevře knihu. Při čtení otevře menu nad rozečtenou knihou, aby se dalo
+        dlouhým stiskem uteču zpátky, aniž by se cokoli stránkovalo znovu.
 
         Vstup do složky i návrat jsou čistě práce s pamětí, takže je bezpečné
         je vyřídit rovnou tady, v cizím vlákně. Načtení knihy zůstává jako
@@ -310,7 +311,10 @@ class Ctecka:
                 return
 
             if self._stav is not Stav.MENU:
-                self._zpet_do_menu()
+                # Ne _zpet_do_menu(): ta stránky zahazuje, takže by se dlouhý
+                # stisk neměl kam vrátit. Zůstává jako veřejná metoda pro
+                # případ, kdy je opravdu potřeba knihu zavřít.
+                self._otevri_menu()
                 return
 
             polozky = self._pohled()
@@ -347,22 +351,19 @@ class Ctecka:
             self._zpet_do_menu()
 
     def otevri_menu(self):
-        """Krátký stisk kodéru při čtení: menu nad rozečtenou knihou.
+        """Menu nad rozečtenou knihou (to, co dělá akce() při čtení).
 
         Na rozdíl od zpet_do_menu() se stránky ani pozice nezahazují. Kniha
         zůstane v paměti, takže dlouhý stisk (zpet_do_cteni) se k ní vrátí
         okamžitě a hlavně bez sáhnutí na e-ink — text na panelu je pořád ten
         správný a jeho překreslení stojí ~29 s.
 
-        Cena je držená kniha v RAM po dobu procházení menu. Jakmile se otevře
-        jiná kniha, dodej_stranky() ji stejně přepíše.
+        Cenou je držená kniha v RAM po dobu procházení menu: naměřeno 2,8 MB
+        u knihy o 1500 stranách, tedy 0,5 % paměti Pi Zero W. Obrázky se v
+        stránkách nedrží, jen cesty do ZIPu.
         """
         with self._zamek:
-            if self._konec or self._stav is Stav.MENU:
-                return False
-            self._stav = Stav.MENU
-            self._zadej_prekresleni()
-            return True
+            return self._otevri_menu()
 
     def zpet_do_cteni(self):
         """Dlouhý stisk kodéru: útěk z menu zpátky do knihy, ať jsi kdekoliv.
@@ -458,6 +459,13 @@ class Ctecka:
                     self._stranka = novy
                     self._pozice_k_ulozeni = (self._kniha, novy)
                     self._zadej_prekresleni()
+
+    def _otevri_menu(self):
+        if self._konec or self._stav is Stav.MENU:
+            return False
+        self._stav = Stav.MENU
+        self._zadej_prekresleni()
+        return True
 
     def _zpet_do_menu(self):
         # Rozpracované načítání se ruší: parser v hlavní smyčce sice doběhne,

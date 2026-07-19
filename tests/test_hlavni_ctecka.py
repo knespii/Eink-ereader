@@ -301,7 +301,179 @@ class TestDlouhyStiskEnkoderu:
         assert c.spotrebuj_prekresleni() is False
 
 
+# --- ÚSPORA ENERGIE ---
+
+
+class TestHlidac:
+    """Fáze je čistá funkce času, takže se dá celá hodina nečinnosti proběhnout
+    předáním `ted` — bez čekání a bez monkeypatchování hodin."""
+
+    def test_cerstvy_vstup_je_bdeni(self):
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.faze(ted=9.9) is h.Uspora.BDENI
+
+    def test_po_prahu_usne(self):
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.faze(ted=10.0) is h.Uspora.SPANEK
+
+    def test_po_druhem_prahu_vypina(self):
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.faze(ted=60.0) is h.Uspora.VYPNUTI
+
+    def test_vstup_posune_oba_prahy(self):
+        """Hodina musí být nepřerušená — jedno cvaknutí v 59. minutě ji vynuluje."""
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        hlidac.zaznamenej_vstup(ted=59.0)
+        assert hlidac.faze(ted=61.0) is h.Uspora.BDENI
+        assert hlidac.faze(ted=70.0) is h.Uspora.SPANEK
+        assert hlidac.faze(ted=119.0) is h.Uspora.VYPNUTI
+
+    def test_vstup_za_bdeni_se_nepolyka(self):
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.zaznamenej_vstup(ted=5.0) is False
+
+    def test_vstup_ze_spanku_se_polyka(self):
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.zaznamenej_vstup(ted=11.0) is True
+
+    def test_polyka_se_jen_prvni_vstup(self):
+        """Druhé cvaknutí už musí projít — jinak by čtečka po probuzení
+        ignorovala všechno, dokud znovu neusne."""
+        hlidac = h.Hlidac(do_spanku=10, do_vypnuti=60, ted=0.0)
+        assert hlidac.zaznamenej_vstup(ted=11.0) is True
+        assert hlidac.zaznamenej_vstup(ted=11.5) is False
+
+
+class TestProbouzeciVstup:
+    """První vstup ze spánku smí jen rozsvítit. Kdyby otočil stránku, čeká se
+    ~29 s na refresh e-inku kvůli sáhnutí na tmavou čtečku."""
+
+    def _ctecka_a_hlidac(self, usnula):
+        c = Ctecka(STROM_ATRAPA)
+        c.spotrebuj_prekresleni()
+        # do_spanku=0 → hlídač považuje za spánek každý vstup
+        hlidac = h.Hlidac(do_spanku=0 if usnula else 10_000, do_vypnuti=10_000)
+        return c, hlidac
+
+    def test_ze_spanku_akci_neprovede(self):
+        c, hlidac = self._ctecka_a_hlidac(usnula=True)
+        h.probouzeci(c, hlidac, c.dalsi)()
+        assert c.snimek().vyber == 0, "probouzecí vstup posunul kurzor"
+
+    def test_ze_spanku_vyzada_prekresleni(self):
+        """Callback kreslit nesmí, takže probuzení hlásí smyčce takhle."""
+        c, hlidac = self._ctecka_a_hlidac(usnula=True)
+        h.probouzeci(c, hlidac, c.dalsi)()
+        assert c.spotrebuj_prekresleni() is True
+
+    def test_za_bdeni_akci_provede(self):
+        c, hlidac = self._ctecka_a_hlidac(usnula=False)
+        h.probouzeci(c, hlidac, c.dalsi)()
+        assert c.snimek().vyber == 1
+
+    def test_bez_hlidace_akci_provede(self):
+        c, _ = self._ctecka_a_hlidac(usnula=False)
+        h.probouzeci(c, None, c.dalsi)()
+        assert c.snimek().vyber == 1
+
+
+class TestProbouzeciStiskEnkoderu:
+    """Jedno stisknutí je trojice callbacků, takže polykání musí přežít celé
+    gesto — jinak by uvolnění vidělo už bdělou čtečku a potvrdilo položku."""
+
+    @pytest.fixture
+    def spici_enkoder(self):
+        c = Ctecka(STROM_ATRAPA)
+        zarizeni = h.pripoj_enkoder(c, h.Hlidac(do_spanku=0, do_vypnuti=10_000))
+        assert zarizeni, "kodér se nepřipojil — piny už asi drží jiný test"
+        c.spotrebuj_prekresleni()
+        yield c, pin_enkoderu(zarizeni)
+        for z in zarizeni:
+            z.close()
+
+    def test_kratky_stisk_jen_probudi(self, spici_enkoder, stisk):
+        c, _ = spici_enkoder
+        stisk(h.PIN_ENKODER_SW)  # kurzor stojí na složce scifi
+        assert c.snimek().adresar == "", "probouzecí stisk vlezl do složky"
+        assert c.vyzvedni_pozadavek() is None
+        assert c.spotrebuj_prekresleni() is True  # ale rozsvítit se má
+
+    def test_dlouhy_stisk_jen_probudi(self, spici_enkoder, pin):
+        """Držení přes práh nesmí ze spánku utéct do knihy."""
+        c, _ = spici_enkoder
+        c.dalsi()
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("Alliances.epub", STRANKY_ATRAPA, 2)
+        c.otevri_menu()
+
+        drz(pin, h.PIN_ENKODER_SW)
+        assert c.snimek().stav is Stav.MENU, "probouzecí držení uteklo do knihy"
+
+    def test_otoceni_jen_probudi(self, spici_enkoder):
+        c, pin = spici_enkoder
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        assert c.snimek().vyber == 0
+
+
 # --- VÝSTUP NA OLED ---
+
+
+class TestZhasinaniOled:
+    """Zhasnutí je jediný strážce v prekresli(), aby se na spánek nemuselo
+    myslet na každém volacím místě ve smyčce."""
+
+    def test_zhasnuty_nekresli(self):
+        zarizeni = TestVystupOled._Atrapa()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        vystup.zhasni()
+        zapisy = zarizeni.zapisy
+        assert vystup.prekresli(Ctecka(STROM_ATRAPA).snimek()) is False
+        assert zarizeni.zapisy == zapisy
+
+    def test_pouzije_hide_kdyz_je(self):
+        class SHide(TestVystupOled._Atrapa):
+            def __init__(self):
+                super().__init__()
+                self.volani = []
+
+            def hide(self):
+                self.volani.append("hide")
+
+            def show(self):
+                self.volani.append("show")
+
+        zarizeni = SHide()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        vystup.zhasni()
+        vystup.rozsvit()
+        assert zarizeni.volani == ["hide", "show"]
+
+    def test_bez_hide_posle_prazdny_obraz(self):
+        """Atrapa ani starší luma hide() mít nemusí — displej musí zhasnout tak
+        jako tak, ne spadnout na AttributeError."""
+        zarizeni = TestVystupOled._Atrapa()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        vystup.zhasni()
+        assert zarizeni.zapisy == 1
+
+    def test_po_rozsviceni_zase_kresli(self):
+        zarizeni = TestVystupOled._Atrapa()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        snimek = Ctecka(STROM_ATRAPA).snimek()
+        vystup.prekresli(snimek)
+        vystup.zhasni()
+        vystup.rozsvit()
+        # Cache se zahazuje: co panel po hide() drží, závisí na knihovně, a
+        # tipnout si znamená risk, že zůstane tmavý.
+        assert vystup.prekresli(snimek) is True
+
+    def test_opakovane_zhasnuti_nic_nedela(self):
+        zarizeni = TestVystupOled._Atrapa()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        vystup.zhasni()
+        vystup.zhasni()
+        assert zarizeni.zapisy == 1
 
 
 class TestVystupOled:
@@ -356,11 +528,35 @@ def pockej(podminka, limit=3.0):
 @pytest.fixture
 def bezici_smycka(monkeypatch):
     """Spustí main() proti atrapám obou displejů a zaznamenává, kam se psalo."""
+    yield from _spust_smycku(monkeypatch)
+
+
+@pytest.fixture
+def spici_smycka(monkeypatch):
+    """Totéž, ale s prahy v desetinách sekundy, aby šel spánek proběhnout.
+
+    DOBA_DO_VYPNUTI zůstává nedosažitelně vysoko — test, který si ji chce
+    zkrátit, ať si ji přepíše sám a monkeypatchne vypni_system(). Tady by ji
+    omylem trefil kdokoli, kdo test o pár set milisekund zpomalí.
+    """
+    monkeypatch.setattr(h, "DOBA_DO_SPANKU", 0.3)
+    monkeypatch.setattr(h, "DOBA_DO_VYPNUTI", 10_000.0)
+    monkeypatch.setattr(h, "TIK_SPANKU", 0.05)
+    yield from _spust_smycku(monkeypatch)
+
+
+def _spust_smycku(monkeypatch):
     zaznam = []
 
     class OledAtrapa:
         def display(self, obraz):
             zaznam.append("oled")
+
+        def hide(self):
+            zaznam.append("oled_zhasnut")
+
+        def show(self):
+            zaznam.append("oled_rozsvicen")
 
     class EinkAtrapa(displej.DummyDriver):
         def zobraz(self, cerna, cervena):
@@ -391,6 +587,99 @@ def bezici_smycka(monkeypatch):
     drzena[0].ukonci()
     vlakno.join(timeout=3.0)
     assert not vlakno.is_alive(), "smyčka se neukončila"
+
+
+class TestUsporaVeSmycce:
+    """Dvě fáze nečinnosti proti skutečně běžící smyčce."""
+
+    def test_po_prahu_zhasne_oled(self, spici_smycka):
+        _, zaznam = spici_smycka
+        assert pockej(lambda: "oled_zhasnut" in zaznam), "OLED po prahu nezhasl"
+
+    def test_ve_spanku_se_na_i2c_nepise(self, spici_smycka):
+        """Ticker se v menu točí dvanáctkrát za sekundu — ve spánku musí mlčet,
+        jinak je celé zhasnutí k ničemu."""
+        _, zaznam = spici_smycka
+        assert pockej(lambda: "oled_zhasnut" in zaznam)
+        zaznam.clear()
+        time.sleep(0.5)
+        assert zaznam == [], f"ve spánku se kreslilo: {zaznam}"
+
+    def test_eink_zustava_netknuty(self, spici_smycka):
+        _, zaznam = spici_smycka
+        assert pockej(lambda: "oled_zhasnut" in zaznam)
+        assert "eink" not in zaznam
+
+    def test_vstup_rozsviti_a_neposune_kurzor(self, spici_smycka, pin):
+        ctecka, zaznam = spici_smycka
+        assert pockej(lambda: "oled_zhasnut" in zaznam)
+        vyber = ctecka.snimek().vyber
+
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+
+        assert pockej(lambda: "oled_rozsvicen" in zaznam), "vstup nerozsvítil OLED"
+        assert ctecka.snimek().vyber == vyber, "probouzecí vstup posunul kurzor"
+        assert pockej(lambda: "oled" in zaznam), "po probuzení se nepřekreslilo"
+
+    def test_probuzeni_pri_cteni_prekresli_oled(self, spici_smycka, pin, stisk):
+        """Při čtení se smyčka na ticker nespoléhá — v CTENI žádný není, takže
+        probuzení musí OLED překreslit samo, jinak zůstane prázdný až do
+        otočení stránky."""
+        ctecka, zaznam = spici_smycka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # na knihu
+        stisk(h.PIN_ENKODER_SW)
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "oled_zhasnut" in zaznam), "OLED při čtení nezhasl"
+
+        zaznam.clear()
+        stisk(h.PIN_ENKODER_SW)  # probouzecí stisk
+
+        assert pockej(lambda: "oled_rozsvicen" in zaznam)
+        assert pockej(lambda: "oled" in zaznam), "po probuzení zůstal OLED prázdný"
+        assert ctecka.snimek().stav is Stav.CTENI, "probouzecí stisk otevřel menu"
+        assert "eink" not in zaznam
+
+    def test_druhy_vstok_uz_projde(self, spici_smycka, pin):
+        ctecka, zaznam = spici_smycka
+        assert pockej(lambda: "oled_zhasnut" in zaznam)
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # probuzení
+        assert pockej(lambda: "oled_rozsvicen" in zaznam)
+
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+
+        assert pockej(lambda: ctecka.snimek().vyber == 1), "druhý vstup se taky spolkl"
+
+    def test_po_druhem_prahu_vypne_system(self, monkeypatch):
+        """Fáze 2: ukonci() uklidí GPIO a I2C, halt přijde až po tom úklidu."""
+        poradi = []
+        monkeypatch.setattr(h, "DOBA_DO_SPANKU", 0.1)
+        monkeypatch.setattr(h, "DOBA_DO_VYPNUTI", 0.3)
+        monkeypatch.setattr(h, "TIK_SPANKU", 0.05)
+        monkeypatch.setattr(h, "vypni_system", lambda: poradi.append("halt"))
+
+        puvodni_vypni = displej.DummyDriver.vypni
+        monkeypatch.setattr(
+            displej.DummyDriver,
+            "vypni",
+            lambda self: poradi.append("uklid") or puvodni_vypni(self),
+        )
+
+        smycka = _spust_smycku(monkeypatch)
+        ctecka, _ = next(smycka)
+        try:
+            assert pockej(lambda: "halt" in poradi, limit=5.0), "systém se nevypnul"
+            assert ctecka.konec is True, "ukonci() se nezavolalo"
+            assert poradi.index("uklid") < poradi.index("halt"), (
+                "halt přišel dřív než úklid GPIO a I2C"
+            )
+        finally:
+            for _ in smycka:  # dojede teardown fixtury
+                pass
+
+    def test_vypni_system_neshodi_program(self, caplog):
+        """Bez NOPASSWD v sudoers sudo selže — čtečka to má přežít."""
+        h.vypni_system(prikaz=("/nonexistent/halt",))
+        assert "Vypnutí selhalo" in caplog.text
 
 
 class TestRozvetveniVystupu:

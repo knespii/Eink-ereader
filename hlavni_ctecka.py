@@ -25,7 +25,10 @@ samotné je v oled_ui.py a vykresleni.py — tady je jen smyčka.
 """
 
 import logging
+import subprocess
+import threading
 import time
+from enum import StrEnum
 
 from gpiozero import Button, RotaryEncoder
 
@@ -80,6 +83,32 @@ PERIODA_HLASENI = 0.1
 # za sekundu.
 PERIODA_SKENU = 2.0
 
+# --- ÚSPORA ENERGIE ---
+# Dvě fáze nečinnosti. Měří se od posledního hardwarového vstupu, ne od
+# posledního překreslení: čtení stránky je z pohledu programu nečinnost, ale
+# uživatel u čtečky sedí, takže by ho deset minut ticha nemělo uspat uprostřed
+# odstavce — proto je práh v minutách, ne v sekundách.
+DOBA_DO_SPANKU = 600.0  # 10 min → zhasne OLED, jinak běží dál
+DOBA_DO_VYPNUTI = 3600.0  # 60 min → ukonci() a vypnutí celého Pi
+
+# Jak dlouho smyčka spí mezi kontrolami, když je čtečka v lehkém spánku. Delší
+# než TIK_CTENI: v spánku není co animovat a jediné, na co se čeká, je uplynutí
+# hodiny. Vstup smyčku probudí okamžitě přes Condition, takže odezva tím netrpí.
+TIK_SPANKU = 5.0
+
+# Vypnutí Pi. Bez hesla to projde jen s pravidlem v sudoers (viz README) —
+# jinak se jen zaloguje chyba a čtečka běží dál.
+PRIKAZ_VYPNUTI = ("sudo", "halt")
+
+
+class Uspora(StrEnum):
+    """Ve které fázi úspory energie čtečka je."""
+
+    BDENI = "BDENI"
+    SPANEK = "SPANEK"  # OLED zhasnutý, program běží
+    VYPNUTI = "VYPNUTI"  # čas zhasnout celé Pi
+
+
 # Po kolika překresleních panel vybílit kvůli duchům. Vypnuto (0), protože
 # na tomhle panelu se to nevyplácí: naměřeno Clear() 91 s a display() 99 s,
 # takže čištění není o něco pomalejší — je to celé další čekání navíc. A jde
@@ -101,6 +130,65 @@ def zobraz(obrazovka, ctecka, fonty):
     # jen odsud, takže posledni_stav.json pořád popisuje obraz na e-inku —
     # menu na OLEDu do něj nezasahuje, protože OLED je po zapnutí stejně prázdný.
     knihovna.uloz_posledni_stav(snimek)
+
+
+class Hlidac:
+    """Kdy naposled sáhla ruka na hardware — a co z toho plyne pro úsporu.
+
+    Fáze je **čistá funkce uplynulého času**, ne vlajka, kterou by nastavovala
+    smyčka. Callback tlačítka a smyčka běží v různých vláknech a callback
+    potřebuje vědět, jestli se spalo, ještě než se smyčka vůbec probudí; kdyby
+    to byla sdílená vlajka, záleželo by na tom, kdo se stihl zeptat dřív.
+    Takhle se oba dívají na tytéž hodiny a nemají se na čem rozejít.
+
+    O displejích ani o Ctecce nic neví — jen měří čas. Co s tím, rozhoduje
+    hlavní smyčka.
+    """
+
+    def __init__(self, do_spanku=DOBA_DO_SPANKU, do_vypnuti=DOBA_DO_VYPNUTI, ted=None):
+        self._do_spanku = do_spanku
+        self._do_vypnuti = do_vypnuti
+        # Zámek jen kvůli čtení a zápisu jednoho floatu z cizích vláken.
+        self._zamek = threading.Lock()
+        self._posledni = time.monotonic() if ted is None else ted
+
+    def zaznamenej_vstup(self, ted=None):
+        """Zapíše hardwarový vstup a řekne, jestli se jím jen procitlo.
+
+        Vrací True, když čtečka spala — pak se vstup **spotřeboval na
+        probuzení** a volající s ním nesmí udělat nic dalšího. Bez toho by
+        první sáhnutí na tmavý displej naslepo otočilo stránku a čekalo by se
+        ~29 s na něco, co nikdo nechtěl.
+        """
+        ted = time.monotonic() if ted is None else ted
+        with self._zamek:
+            spalo_se = ted - self._posledni >= self._do_spanku
+            self._posledni = ted
+            return spalo_se
+
+    def faze(self, ted=None):
+        ted = time.monotonic() if ted is None else ted
+        with self._zamek:
+            necinnost = ted - self._posledni
+        if necinnost >= self._do_vypnuti:
+            return Uspora.VYPNUTI
+        if necinnost >= self._do_spanku:
+            return Uspora.SPANEK
+        return Uspora.BDENI
+
+
+def vypni_system(prikaz=PRIKAZ_VYPNUTI):
+    """Zhasne celé Pi. Volá se až po úklidu GPIO a I2C, ne místo něj.
+
+    Selhání se jen zaloguje: bez pravidla v sudoers sudo čeká na heslo, které
+    u čtečky nemá kdo zadat, a shodit kvůli tomu program by bylo horší než
+    zůstat zapnutý.
+    """
+    logging.info("Hodina nečinnosti — vypínám systém (%s).", " ".join(prikaz))
+    try:
+        subprocess.run(list(prikaz), check=True, timeout=30)
+    except Exception as e:
+        logging.error("Vypnutí selhalo (%s). Chybí nejspíš NOPASSWD v sudoers.", e)
 
 
 class VystupEink:
@@ -195,8 +283,39 @@ class VystupOled:
         self._zarizeni = zarizeni
         self._fonty = fonty
         self._posledni = None
+        self.zhasnuto = False
+
+    def zhasni(self):
+        """Vypne panel po deseti minutách nečinnosti.
+
+        luma zná hide()/show(); atrapa v testech nemusí, tak se pro ni pošle
+        prázdný obraz — na SSD1306 je černá skoro zadarmo a rozdíl proti
+        skutečnému vypnutí segmentu je v mA, ne v jednotkách.
+        """
+        if self.zhasnuto:
+            return
+        self.zhasnuto = True
+        if hasattr(self._zarizeni, "hide"):
+            self._zarizeni.hide()
+        else:
+            self._zarizeni.display(oled_ui.vykresli_hlaseni("", self._fonty))
+        self._posledni = None
+
+    def rozsvit(self):
+        """Probuzení. Vyhazuje i porovnávací cache: co panel ukazuje po hide(),
+        záleží na knihovně, a hádat to znamená risk, že zůstane tmavý."""
+        if not self.zhasnuto:
+            return
+        self.zhasnuto = False
+        if hasattr(self._zarizeni, "show"):
+            self._zarizeni.show()
+        self._posledni = None
 
     def prekresli(self, snimek, faze=0):
+        # Jediný strážce pro všechna volací místa ve smyčce — ticker i stavový
+        # řádek tím při spánku umlknou samy a nikde se na to nemusí myslet.
+        if self.zhasnuto:
+            return False
         obraz = oled_ui.vykresli_oled(snimek, self._fonty, faze)
         data = obraz.tobytes()
         if data == self._posledni:
@@ -219,7 +338,7 @@ class VystupOled:
         self._zarizeni.display(obraz)
 
 
-def pripoj_tlacitka(ctecka):
+def pripoj_tlacitka(ctecka, hlidac=None):
     """Naváže listovací tlačítka na stav. Volající si vrácený seznam musí
     podržet — zapomenuté Button objekty sebere garbage collector a tlačítka
     umlknou.
@@ -233,13 +352,35 @@ def pripoj_tlacitka(ctecka):
     dalsi = Button(PIN_DALSI, bounce_time=DOBA_ZAKMITU)
     predchozi = Button(PIN_PREDCHOZI, bounce_time=DOBA_ZAKMITU)
 
-    dalsi.when_pressed = ctecka.dalsi
-    predchozi.when_pressed = ctecka.predchozi
+    dalsi.when_pressed = probouzeci(ctecka, hlidac, ctecka.dalsi)
+    predchozi.when_pressed = probouzeci(ctecka, hlidac, ctecka.predchozi)
 
     return [dalsi, predchozi]
 
 
-def pripoj_enkoder(ctecka):
+def probouzeci(ctecka, hlidac, co_udelat):
+    """Obalí callback hlídačem nečinnosti.
+
+    Ze spánku první vstup jen rozsvítí a **svou akci neprovede** — o tom, jestli
+    se spalo, rozhoduje hlídač, ne volající. Probuzení se hlásí smyčce přes
+    vyzadej_prekresleni(): callback sám kreslit nesmí a tohle je jediná cesta,
+    jak ji hned probudit. Při čtení tím e-ink netrpí — VystupEink pozná, že by
+    psal tentýž text, a panel nechá být.
+
+    Bez hlídače (hlidac=None) se chová jako holý callback, aby šlo tlačítka
+    navěsit i bez správy napájení.
+    """
+
+    def obsluha():
+        if hlidac is not None and hlidac.zaznamenej_vstup():
+            ctecka.vyzadej_prekresleni()
+            return
+        co_udelat()
+
+    return obsluha
+
+
+def pripoj_enkoder(ctecka, hlidac=None):
     """Naváže rotační kodér na stav. Vrácený seznam si volající musí podržet.
 
     Tlačítko v kodéru obsluhuje celé menu samo:
@@ -271,31 +412,45 @@ def pripoj_enkoder(ctecka):
 
         return obsluha
 
-    kolecko.when_rotated_clockwise = jen_v_menu(ctecka.dalsi)
-    kolecko.when_rotated_counter_clockwise = jen_v_menu(ctecka.predchozi)
+    # Probuzení se řeší až za kontrolou stavu: otáčení má při čtení mlčet,
+    # ale ze spánku musí rozsvítit i ono.
+    kolecko.when_rotated_clockwise = probouzeci(ctecka, hlidac, jen_v_menu(ctecka.dalsi))
+    kolecko.when_rotated_counter_clockwise = probouzeci(
+        ctecka, hlidac, jen_v_menu(ctecka.predchozi)
+    )
 
     # Krátký stisk se vyhodnotí až při uvolnění a jen tehdy, když mezitím
     # nepřišlo when_held. Kdyby visel na when_pressed, dlouhý stisk by nejdřív
     # potvrdil položku pod kurzorem (stisk přijde okamžitě) a teprve pak utekl
     # do knihy — držení nad knihou by pokaždé spustilo stránkování.
     drzeno = False
+    # Probouzecí stisk se nedá obalit jako u ostatních vstupů: jedno stisknutí
+    # je tady trojice callbacků a rozhodnout se musí hned na začátku gesta.
+    # Kdyby se hlídač ptal až při uvolnění, when_pressed by systém probudilo a
+    # uvolnění by pak vidělo bdělou čtečku a potvrdilo položku pod kurzorem —
+    # tedy přesně to, čemu má polykání zabránit. Vlajka proto drží celé gesto
+    # a shazuje ji až další stisk.
+    probouzi = False
 
     def na_stisku():
-        nonlocal drzeno
+        nonlocal drzeno, probouzi
         drzeno = False
+        probouzi = hlidac is not None and hlidac.zaznamenej_vstup()
+        if probouzi:
+            ctecka.vyzadej_prekresleni()
 
     def na_drzeni():
         nonlocal drzeno
         drzeno = True
-        ctecka.zpet_do_cteni()
+        if not probouzi:
+            ctecka.zpet_do_cteni()
 
     def na_uvolneni():
-        if drzeno:
-            return
-        if ctecka.snimek().stav is Stav.MENU:
+        # Větvení podle stavu je uvnitř akce(): v menu potvrdí položku, při
+        # čtení otevře menu. Díky tomu jede simulátor na téže cestě, i když
+        # žádný kodér nemá.
+        if not drzeno and not probouzi:
             ctecka.akce()
-        else:
-            ctecka.otevri_menu()
 
     tlacitko.when_pressed = na_stisku
     tlacitko.when_held = na_drzeni
@@ -322,7 +477,11 @@ def main():
 
     obrazovka = VystupEink(displej.vytvor_displej(), fonty, otisk_ulozeneho(ulozeny))
     oled = VystupOled(oled_ui.vytvor_oled(), oled_ui.nacti_fonty())
-    ovladace = pripoj_tlacitka(ctecka) + pripoj_enkoder(ctecka)
+    # Konstanty se čtou až tady, ne jako výchozí hodnoty parametrů — testy si je
+    # tak můžou přenastavit na zlomky sekundy.
+    hlidac = Hlidac(DOBA_DO_SPANKU, DOBA_DO_VYPNUTI)
+    ovladace = pripoj_tlacitka(ctecka, hlidac) + pripoj_enkoder(ctecka, hlidac)
+    vypnout = False
 
     # Panel sice drží obraz i bez napájení, ale první display() ho celý
     # přepíše, takže vybílit ho předtím jen zdvojuje čekání na první stránku.
@@ -342,10 +501,34 @@ def main():
         while not ctecka.konec:
             v_menu = ctecka.snimek().stav is Stav.MENU
 
+            # Úsporu vyhodnocuje smyčka, ne callback: zhasnout a rozsvítit
+            # znamená sáhnout na I2C, a to do cizího vlákna nepatří. Srovnává
+            # se skutečný stav displeje s fází, takže se nemůže ztratit ani
+            # probuzení, které přišlo uprostřed předchozího průchodu.
+            faze = hlidac.faze()
+            if faze is Uspora.VYPNUTI:
+                # Nejdřív se korektně ukončí smyčka; halt přijde až po úklidu
+                # GPIO a I2C ve finally, ne odsud.
+                vypnout = True
+                ctecka.ukonci()
+                break
+            spi = faze is Uspora.SPANEK
+            if spi:
+                oled.zhasni()
+            elif oled.zhasnuto:
+                # Překreslí se rovnou tady, ne až přes vlajku od probouzecího
+                # vstupu: tu smyčka spotřebuje ještě v témže průchodu, kdy je
+                # displej zhasnutý, takže ji strážce ve VystupOled zahodí. V
+                # menu by to zachránil ticker v dalším průchodu, při čtení ale
+                # žádný není a OLED by zůstal prázdný až do otočení stránky.
+                oled.rozsvit()
+                oled.prekresli(ctecka.snimek())
+
             # Vlajku shodí cekej_na_prekresleni() ještě před renderem. Stisk,
             # který přijde během zápisu na e-ink, ji tak nastaví znovu a smyčka
             # překreslí ještě jednou, místo aby se ztratil.
-            if ctecka.cekej_na_prekresleni(TIK_MENU if v_menu else TIK_CTENI):
+            tik = TIK_SPANKU if spi else (TIK_MENU if v_menu else TIK_CTENI)
+            if ctecka.cekej_na_prekresleni(tik):
                 snimek = ctecka.snimek()
                 polozka_od = time.monotonic()  # nová položka se čte od začátku
 
@@ -386,8 +569,10 @@ def main():
             # Nové knihy a složky se tím ukážou samy, bez restartu. Skenuje se
             # po PERIODA_SKENU, ne při každém průchodu: v menu se smyčka točí
             # sedmkrát za sekundu a tolik výpisů adresáře je zbytečné.
+            # Ve spánku se neskenuje: sahat na SD kartu dvakrát za sekundu po
+            # dobu padesáti minut je pravý opak úspory a nikdo se stejně nedívá.
             ted = time.monotonic()
-            if v_menu and ted - posledni_sken >= PERIODA_SKENU:
+            if v_menu and not spi and ted - posledni_sken >= PERIODA_SKENU:
                 posledni_sken = ted
                 ctecka.nastav_seznam_knih(knihovna.nacti_strom())
 
@@ -398,6 +583,11 @@ def main():
         for ovladac in ovladace:
             ovladac.close()
         obrazovka.vypni()
+
+    # Až po úklidu: sudo halt sestřelí systém pod rukama, takže se GPIO a I2C
+    # musí pustit dřív, ne až se to bude hodit.
+    if vypnout:
+        vypni_system()
 
 
 if __name__ == "__main__":
