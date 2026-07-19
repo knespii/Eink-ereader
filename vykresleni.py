@@ -69,13 +69,10 @@ def vykresli(stav, fonty, nacti_obrazek=None):
     cervena = Image.new("1", (SIRKA, VYSKA), 255)
 
     if stav.stav is Stav.CTENI:
+        # Při čtení jde na panel jen text knihy. Číslo stránky ukazuje OLED,
+        # takže by tu lišta jen ubírala místo a nutila k překreslení i tehdy,
+        # když se změnilo jen pořadové číslo.
         _vykresli_cteni(cerna, ImageDraw.Draw(cerna), stav, fonty, nacti_obrazek)
-        _vykresli_listu(
-            ImageDraw.Draw(cervena),
-            fonty,
-            f"Strana {stav.cislo_stranky} / {stav.pocet_stranek}",
-            x=SIRKA - 200,
-        )
     else:
         _vykresli_menu(ImageDraw.Draw(cerna), stav, fonty)
         _vykresli_listu(ImageDraw.Draw(cervena), fonty, _text_listy(stav))
@@ -153,10 +150,28 @@ def _vykresli_cteni(cerna, kresli, stav, fonty, nacti_obrazek):
     # Rozestup si bere zpracovani_textu, protože podle něj byla stránka
     # rozvržená. Zadrátovaná konstanta by text zase nahustila.
     rozestup = zpracovani_textu.vyska_radku(fonty.text)
-    y = OKRAJ
+    y = _horni_okraj_textu(fonty, rozestup)
     for radek in stranka["obsah"]:
         kresli.text((OKRAJ, y), radek, font=fonty.text, fill=0)
         y += rozestup
+
+
+def _horni_okraj_textu(fonty, rozestup):
+    """Odsazení shora, aby text vyšel svisle na střed panelu.
+
+    Po zrušení stavové lišty zbylo dole volné místo. Počítá se z **plné**
+    stránky, ne z počtu řádků na té aktuální: jinak by poslední, poloprázdná
+    stránka kapitoly plavala uprostřed panelu a text by mezi stránkami
+    poskakoval.
+
+    Rozšířit rovnou TEXT_VYSKA nemá smysl — 820 i 840 px pojme při rozestupu
+    43 px stejných 19 řádků, takže by to jen zneplatnilo cache stránkování.
+    """
+    radku = TEXT_VYSKA // rozestup
+    # Poslední řádek nezabírá celý rozestup, jen výšku písma bez mezery.
+    vyska_bloku = (radku - 1) * rozestup + zpracovani_textu.vyska_radku(fonty.text, 0)
+    volno = (VYSKA - 2 * OKRAJ) - vyska_bloku
+    return OKRAJ + max(0, volno) // 2
 
 
 def _vykresli_obrazek(cerna, kresli, cesta_v_archivu, fonty, nacti_obrazek):
@@ -165,8 +180,10 @@ def _vykresli_obrazek(cerna, kresli, cesta_v_archivu, fonty, nacti_obrazek):
         kresli.text((OKRAJ, OKRAJ), "[obrázek nelze zobrazit]", font=fonty.text, fill=0)
         return
 
+    # Na střed celého panelu, ne jen textové oblasti: při čtení už dole žádná
+    # lišta není, takže by se obrázek jinak držel zbytečně vysoko.
     x = (SIRKA - obrazek.width) // 2
-    y = (TEXT_VYSKA - obrazek.height) // 2
+    y = (VYSKA - obrazek.height) // 2
     cerna.paste(obrazek, (max(0, x), max(0, y)))
 
 

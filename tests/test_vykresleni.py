@@ -15,6 +15,18 @@ def _inkoust(bitmapa):
     return sum(n for n, v in bitmapa.getcolors() if v == 0)
 
 
+def _svisly_rozsah(bitmapa):
+    """(nejvyšší, nejnižší) řádek s inkoustem. Bez inkoustu vrací (0, 0)."""
+    pole = bitmapa.load()
+    radky = [
+        y
+        for y in range(bitmapa.height)
+        for x in range(0, bitmapa.width, 4)
+        if pole[x, y] == 0
+    ]
+    return (min(radky), max(radky)) if radky else (0, 0)
+
+
 class TestCistota:
     def test_neimportuje_hardware(self):
         """Přes AST, ne přes sys.modules — ten může naplnit kdokoliv jiný."""
@@ -165,20 +177,63 @@ class TestCteni:
         cerna, _ = vykresleni.vykresli(ctecka_v_knize.snimek(), fonty)
         assert _inkoust(cerna) > 10000
 
+    def test_cervena_vrstva_zustane_prazdna(self, ctecka_v_knize, fonty):
+        """Na e-inku je při čtení jen text knihy — číslo stránky ukazuje OLED.
+
+        Lišta se sem kreslila dřív; kdyby se vrátila, ubere místo textu a
+        vynutí překreslení panelu i tehdy, když se změnilo jen pořadové číslo.
+        """
+        _, cervena = vykresleni.vykresli(ctecka_v_knize.snimek(), fonty)
+        assert _inkoust(cervena) == 0
+
+    def test_menu_listu_porad_kresli(self, fonty):
+        """Kontrola, že se lišta zrušila jen pro čtení, ne pro menu."""
+        _, cervena = vykresleni.vykresli(Ctecka(["a.epub"]).snimek(), fonty)
+        assert _inkoust(cervena) > 0
+
     def test_text_sahá_az_dolu(self, ctecka_v_knize, fonty):
-        """Se zadrátovanými 37 px končil kolem y=700."""
+        """Se zadrátovanými 37 px končil kolem y=700.
+
+        Prohledává se celá výška panelu, ne jen po LISTA_Y: po zrušení lišty
+        text sahá i pod ni a užší výřez by neodhalil, že se text seká.
+        """
         cerna, _ = vykresleni.vykresli(ctecka_v_knize.snimek(), fonty)
-        pole = cerna.load()
-        nejnizsi = max(
-            (
-                y
-                for y in range(vykresleni.LISTA_Y)
-                for x in range(0, vykresleni.SIRKA, 4)
-                if pole[x, y] == 0
-            ),
-            default=0,
+        nahore, dole = _svisly_rozsah(cerna)
+        assert 780 < dole < vykresleni.VYSKA
+
+    def test_text_je_svisle_na_stredu(self, ctecka_v_knize, fonty):
+        """Volné místo po zrušené liště se rozdělí nahoru a dolů.
+
+        Dřív text začínal na OKRAJ a celý zbytek zůstal dole.
+        """
+        cerna, _ = vykresleni.vykresli(ctecka_v_knize.snimek(), fonty)
+        nahore, dole = _svisly_rozsah(cerna)
+        okraj_dole = vykresleni.VYSKA - dole - 1
+        assert abs(nahore - okraj_dole) < 15, f"okraje {nahore} vs {okraj_dole}"
+
+    def test_kratka_stranka_neplave_uprostred(self, fonty):
+        """Odsazení se počítá z plné stránky, ne z počtu řádků na té aktuální —
+        jinak by text mezi stránkami poskakoval.
+
+        Obě stránky mají shodný první řádek, aby se porovnávalo odsazení,
+        ne náhodou vyšší glyf.
+        """
+        radek = "Ahoj svete"
+        c = Ctecka(["a.epub"])
+        c.akce()
+        c.dodej_stranky(
+            c.vyzvedni_pozadavek(),
+            [
+                {"typ": "text", "obsah": [radek]},
+                {"typ": "text", "obsah": [radek] * 19},
+            ],
+            0,
         )
-        assert 780 < nejnizsi < vykresleni.LISTA_Y
+        kratka, _ = vykresleni.vykresli(c.snimek(), fonty)
+        c.dalsi()
+        plna, _ = vykresleni.vykresli(c.snimek(), fonty)
+
+        assert _svisly_rozsah(kratka)[0] == _svisly_rozsah(plna)[0]
 
     def test_pouziva_rozestup_z_layoutu(self, fonty):
         assert zpracovani_textu.vyska_radku(fonty.text) == 43

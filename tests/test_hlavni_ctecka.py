@@ -450,3 +450,43 @@ class TestRozvetveniVystupu:
         assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
         time.sleep(0.4)
         assert "eink" not in zaznam, "návrat do menu zbytečně překreslil panel"
+
+
+class TestHlaseniNacitani:
+    """Parsování knihy blokuje smyčku na ~16 s. Bez odezvy by displej celou
+    tu dobu ukazoval starý obsah a čtečka působila zaseknutě."""
+
+    def test_hlaseni_je_vycentrovane(self):
+        obraz = h.oled_ui.vykresli_hlaseni("Načítám…", h.oled_ui.nacti_fonty())
+        pole = obraz.load()
+        xs = [x for x in range(obraz.width) for y in range(obraz.height) if pole[x, y]]
+        ys = [y for y in range(obraz.height) for x in range(obraz.width) if pole[x, y]]
+        assert abs(min(xs) - (obraz.width - max(xs) - 1)) <= 2
+        assert abs(min(ys) - (obraz.height - max(ys) - 1)) <= 2
+
+    def test_hlaseni_obejde_porovnani_s_poslednim(self):
+        """Musí se poslat vždy, i kdyby vyšlo shodně s tím, co už na displeji je."""
+        zarizeni = TestVystupOled._Atrapa()
+        vystup = h.VystupOled(zarizeni, h.oled_ui.nacti_fonty())
+        vystup.hlaseni("Načítám…")
+        vystup.hlaseni("Načítám…")
+        assert zarizeni.zapisy == 2
+
+    def test_hlaseni_prijde_pred_parsovanim(self, monkeypatch, bezici_smycka, pin, stisk):
+        """Kdyby se hláška kreslila až po obsluz(), uživatel ji uvidí až ve
+        chvíli, kdy je kniha dávno načtená — tedy k ničemu."""
+        poradi = []
+        monkeypatch.setattr(
+            h.knihovna,
+            "nacti_stranky",
+            lambda nazev, fonty: poradi.append("parsovani") or STRANKY_ATRAPA,
+        )
+        monkeypatch.setattr(
+            h.VystupOled, "hlaseni", lambda self, text: poradi.append("hlaseni")
+        )
+
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)  # ze složky na knihu
+        stisk(h.PIN_ENKODER_SW)
+
+        assert pockej(lambda: "parsovani" in poradi)
+        assert poradi.index("hlaseni") < poradi.index("parsovani")

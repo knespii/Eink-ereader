@@ -102,6 +102,17 @@ class VystupOled:
         self._zarizeni.display(obraz)
         return True
 
+    def hlaseni(self, text):
+        """Okamžitě promaže displej a vypíše vycentrovanou hlášku.
+
+        Obchází porovnání s posledním obrazem — hláška se musí objevit i
+        tehdy, když by shodou okolností vyšla stejně jako to, co už na
+        displeji je.
+        """
+        obraz = oled_ui.vykresli_hlaseni(text, self._fonty)
+        self._posledni = obraz.tobytes()
+        self._zarizeni.display(obraz)
+
 
 def pripoj_tlacitka(ctecka):
     """Naváže tlačítka na stav. Volající si vrácený seznam musí podržet —
@@ -236,7 +247,11 @@ def main():
                 faze_tickeru += KROK_TICKERU
                 oled.prekresli(ctecka.snimek(), faze_tickeru)
 
-            # Drahá práce patří sem, ne do callbacku tlačítka.
+            # Drahá práce patří sem, ne do callbacku tlačítka. Než se do ní
+            # smyčka pustí, dostane uživatel odezvu: parsování a stránkování
+            # knihy trvá na Pi Zero W ~16 s a po tu dobu se smyčka nevrátí.
+            if ctecka.snimek().nacita_se:
+                oled.hlaseni("Načítám…")
             knihovna.obsluz(ctecka, fonty)
 
             # Nové knihy a složky se tím ukážou samy, bez restartu. Skenuje se

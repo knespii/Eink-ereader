@@ -156,6 +156,24 @@ def vykresli_oled(snimek, fonty=None, faze=0):
     return obraz
 
 
+def vykresli_hlaseni(text, fonty=None):
+    """Prázdný displej s jedním vodorovně i svisle vycentrovaným řádkem.
+
+    Určeno pro hlášky, které se musí objevit okamžitě a nezávisle na stavu —
+    typicky „Načítám…" těsně před parsováním EPUBu, které na Pi Zero W trvá
+    ~16 s. Bez toho by displej celou tu dobu ukazoval starý obsah a čtečka
+    působila zaseknutě.
+    """
+    if fonty is None:
+        fonty = nacti_fonty()
+
+    obraz = Image.new("1", (SIRKA, VYSKA), 0)
+    kresli = ImageDraw.Draw(obraz)
+    x = max(OKRAJ, (SIRKA - _sirka(kresli, text, fonty.text)) // 2)
+    _text_vlevo(kresli, text, fonty.text, x, _STRED_Y)
+    return obraz
+
+
 def _menu(obraz, fonty, snimek, faze):
     polozky = snimek.polozky
     if not polozky:
