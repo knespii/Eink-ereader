@@ -11,7 +11,7 @@ User=__UZIVATEL__
 WorkingDirectory=__ADRESAR__
 ExecStart=__ADRESAR__/.venv/bin/python __ADRESAR__/hlavni_ctecka.py
 # Po pádu (nenulový návrat) čtečku nastartuj znovu. Vypnutí po hodině nečinnosti
-# končí návratem 0 a to se nerestartuje — jinak by se čtečka po `sudo halt`
+# končí návratem 0 a to se nerestartuje — jinak by se čtečka po `sudo poweroff`
 # nastartovala ještě jednou, než systém stihne spadnout.
 Restart=on-failure
 RestartSec=5

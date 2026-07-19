@@ -36,6 +36,9 @@ from typing import Any
 class Stav(StrEnum):
     MENU = "MENU"
     CTENI = "CTENI"
+    # Listování stránkami jen po OLEDu: e-ink se nedotkne, dokud uživatel
+    # výběr nepotvrdí. Bez toho by každé cvrnknutí kodéru stálo ~29 s.
+    RYCHLE_LISTOVANI = "RYCHLE_LISTOVANI"
 
 
 class Typ(StrEnum):
@@ -80,6 +83,9 @@ class Snimek:
     pocet_stranek: int
     nacita_se: bool
     chyba: str | None
+    # Číslo stránky (1..N), na které se stálo při vstupu do RYCHLE_LISTOVANI.
+    # Mimo tento stav je rovné cislo_stranky a nikdo se na něj nedívá.
+    puvodni_cislo_stranky: int = 0
 
 
 class Ctecka:
@@ -103,6 +109,8 @@ class Ctecka:
         self._kniha: str | None = None
         self._stranky: list[Any] = []
         self._stranka = 0
+        # Kam se vrátit, když uživatel rychlé listování zruší.
+        self._puvodni_stranka = 0
 
         self._pozadavek: str | None = None  # čeká na vyzvednutí
         self._nacitana: str | None = None  # vyzvednuto, právě se parsuje
@@ -125,7 +133,7 @@ class Ctecka:
     def snimek(self):
         with self._zamek:
             stranka = None
-            if self._stav is Stav.CTENI and 0 <= self._stranka < len(self._stranky):
+            if self._stav is not Stav.MENU and 0 <= self._stranka < len(self._stranky):
                 stranka = self._stranky[self._stranka]
 
             polozky = self._pohled()
@@ -142,6 +150,7 @@ class Ctecka:
                 pocet_stranek=len(self._stranky),
                 nacita_se=self._nacita_se(),
                 chyba=self._chyba,
+                puvodni_cislo_stranky=self._puvodni_stranka + 1,
             )
 
     @property
@@ -263,6 +272,7 @@ class Ctecka:
             self._kniha = nazev
             self._stranky = stranky
             self._stranka = max(0, min(stranka, len(stranky) - 1))
+            self._puvodni_stranka = self._stranka
             self._stav = Stav.CTENI
             return True
 
@@ -308,6 +318,12 @@ class Ctecka:
         """
         with self._zamek:
             if self._konec or self._nacita_se():
+                return
+
+            if self._stav is Stav.RYCHLE_LISTOVANI:
+                # Uprostřed listování je krátký stisk potvrzení výběru, ne
+                # cesta do menu — tam se dostane až dalším stiskem při čtení.
+                self._potvrd_rychle_listovani()
                 return
 
             if self._stav is not Stav.MENU:
@@ -384,6 +400,43 @@ class Ctecka:
             self._zadej_prekresleni()
             return True
 
+    def zacni_rychle_listovani(self):
+        """Dlouhý stisk při čtení: listování po OLEDu, e-ink se nedotkne.
+
+        Zapamatuje si stránku, na které uživatel stál, aby se dalo zrušit.
+        Vrací True, jen když se stav opravdu přepnul.
+        """
+        with self._zamek:
+            if self._konec or self._stav is not Stav.CTENI or not self._stranky:
+                return False
+            self._puvodni_stranka = self._stranka
+            self._stav = Stav.RYCHLE_LISTOVANI
+            self._zadej_prekresleni()
+            return True
+
+    def potvrd_rychle_listovani(self):
+        """Krátký stisk: vybraná stránka platí, ať ji e-ink vykreslí.
+
+        Pozice se zapisuje až tady, ne při každém cvaknutí kodéru — jinak by
+        se do progress.json ukládaly i stránky, kterými se jen prolétlo.
+        """
+        with self._zamek:
+            return self._potvrd_rychle_listovani()
+
+    def zrus_rychle_listovani(self):
+        """Dlouhý stisk během listování: zpátky na stránku, odkud se vyšlo.
+
+        Překreslení se vyžádá, i když se stránka nezměnila: e-ink pak nesáhne
+        na panel (drží tentýž text), ale OLED se musí vrátit do čtecího režimu.
+        """
+        with self._zamek:
+            if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
+                return False
+            self._stranka = self._puvodni_stranka
+            self._stav = Stav.CTENI
+            self._zadej_prekresleni()
+            return True
+
     def ukonci(self):
         """Dlouhý stisk: požadavek na ukončení programu."""
         with self._zamek:
@@ -425,6 +478,7 @@ class Ctecka:
             self._kniha = nazev
             self._stranky = stranky
             self._stranka = max(0, min(pocatecni_stranka, len(stranky) - 1))
+            self._puvodni_stranka = self._stranka
             self._stav = Stav.CTENI
             self._chyba = None
             self._zadej_prekresleni()
@@ -457,8 +511,22 @@ class Ctecka:
                 novy = self._stranka + smer
                 if 0 <= novy < len(self._stranky):
                     self._stranka = novy
-                    self._pozice_k_ulozeni = (self._kniha, novy)
+                    # Při rychlém listování se pozice nezapisuje: uživatel se
+                    # může vrátit zpět a průletové stránky nemají co na SD kartě
+                    # dělat. Uloží je až potvrd_rychle_listovani().
+                    if self._stav is Stav.CTENI:
+                        self._pozice_k_ulozeni = (self._kniha, novy)
                     self._zadej_prekresleni()
+
+    def _potvrd_rychle_listovani(self):
+        if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
+            return False
+        self._stav = Stav.CTENI
+        if self._stranka != self._puvodni_stranka:
+            self._pozice_k_ulozeni = (self._kniha, self._stranka)
+        self._puvodni_stranka = self._stranka
+        self._zadej_prekresleni()
+        return True
 
     def _otevri_menu(self):
         if self._konec or self._stav is Stav.MENU:

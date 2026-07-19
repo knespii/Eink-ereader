@@ -1063,3 +1063,81 @@ class TestHlasVeStrankovani:
 
         obsah = [{"typ": "text", "hodnota": "nejaky text"}]
         assert zpracovani_textu.zformatuj_a_rozdel(obsah, fonty.text, 400, 800)
+
+
+class TestRychleListovani:
+    """Listování stránkami po OLEDu, dokud se výběr nepotvrdí.
+
+    Celý smysl režimu je v tom, co se **nestane**: e-ink se během listování
+    nesmí probudit, jinak stojí každé cvaknutí kodéru ~29 s. Testy proto hlídají
+    hlavně nepřítomnost "eink" v záznamu, ne přítomnost "oled".
+    """
+
+    @pytest.fixture
+    def ve_cteni_smycka(self, bezici_smycka, pin, stisk):
+        """Běžící smyčka s otevřenou knihou na 2. stránce a čistým záznamem.
+
+        Kniha z conftestu má 5 stránek, takže je kam listovat oběma směry.
+        """
+        ctecka, zaznam = bezici_smycka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        stisk(h.PIN_ENKODER_SW)
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "eink" in zaznam)
+        stisk(h.PIN_DALSI)
+        assert pockej(lambda: ctecka.snimek().cislo_stranky == 2)
+        zaznam.clear()
+        return ctecka, zaznam
+
+    def test_listovani_nesahne_na_eink(self, ve_cteni_smycka, pin):
+        ctecka, zaznam = ve_cteni_smycka
+        drz(pin, h.PIN_ENKODER_SW)
+        assert ctecka.snimek().stav is Stav.RYCHLE_LISTOVANI
+
+        for _ in range(3):
+            krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+
+        assert pockej(lambda: ctecka.snimek().cislo_stranky == 5)
+        assert pockej(lambda: "oled" in zaznam)
+        assert "eink" not in zaznam, f"e-ink se překreslil při listování: {zaznam}"
+        assert ctecka.snimek().puvodni_cislo_stranky == 2
+
+    def test_potvrzeni_prekresli_eink(self, ve_cteni_smycka, pin, stisk):
+        ctecka, zaznam = ve_cteni_smycka
+        drz(pin, h.PIN_ENKODER_SW)
+        for _ in range(3):
+            krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        assert pockej(lambda: ctecka.snimek().cislo_stranky == 5)
+        zaznam.clear()
+
+        stisk(h.PIN_ENKODER_SW)
+
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "eink" in zaznam), "potvrzení nepřekreslilo panel"
+        assert ctecka.snimek().cislo_stranky == 5
+
+    def test_zruseni_vrati_stranku_a_nesahne_na_eink(self, ve_cteni_smycka, pin):
+        """Zrušení překreslení vyžádá, ale panel drží tentýž text, takže
+        VystupEink na něj nesáhne — vrátit se musí jen OLED."""
+        ctecka, zaznam = ve_cteni_smycka
+        drz(pin, h.PIN_ENKODER_SW)
+        for _ in range(3):
+            krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        assert pockej(lambda: ctecka.snimek().cislo_stranky == 5)
+        zaznam.clear()
+
+        drz(pin, h.PIN_ENKODER_SW)
+
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert ctecka.snimek().cislo_stranky == 2
+        assert pockej(lambda: "oled" in zaznam), "OLED se nevrátil do čtení"
+        assert "eink" not in zaznam, f"zrušení zbytečně vzbudilo panel: {zaznam}"
+
+    def test_pri_cteni_enkoder_dal_mlci(self, ve_cteni_smycka, pin):
+        """Uvolnění podmínky u otáčení se nesmí protáhnout do běžného čtení."""
+        ctecka, zaznam = ve_cteni_smycka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        time.sleep(0.3)
+
+        assert ctecka.snimek().cislo_stranky == 2
+        assert zaznam == [], f"kodér při čtení překreslil {zaznam}"

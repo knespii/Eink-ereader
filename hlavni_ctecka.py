@@ -96,9 +96,11 @@ DOBA_DO_VYPNUTI = 3600.0  # 60 min → ukonci() a vypnutí celého Pi
 # hodiny. Vstup smyčku probudí okamžitě přes Condition, takže odezva tím netrpí.
 TIK_SPANKU = 5.0
 
-# Vypnutí Pi. Bez hesla to projde jen s pravidlem v sudoers (viz README) —
-# jinak se jen zaloguje chyba a čtečka běží dál.
-PRIKAZ_VYPNUTI = ("sudo", "halt")
+# Vypnutí Pi. Ne `halt`: ten systém jen zastaví a nechá ho pod proudem.
+# `poweroff` projde vypínací sekvencí, což je u čtečky na baterii to, oč jde.
+# Bez hesla to projde jen s pravidlem v sudoers (viz README) — jinak se
+# zaloguje chyba a čtečka běží dál.
+PRIKAZ_VYPNUTI = ("sudo", "poweroff")
 
 
 class Uspora(StrEnum):
@@ -405,18 +407,20 @@ def pripoj_enkoder(ctecka, hlidac=None):
         logging.warning("Rotační kodér není dostupný (%s), pokračuji bez něj.", e)
         return []
 
-    def jen_v_menu(co_udelat):
+    # Otáčení smí i při rychlém listování — tam je právě k tomu. Hluché
+    # zůstává jen při běžném čtení, kde stránky patří tlačítkům u e-inku.
+    def jen_po_oledu(co_udelat):
         def obsluha():
-            if ctecka.snimek().stav is Stav.MENU:
+            if ctecka.snimek().stav is not Stav.CTENI:
                 co_udelat()
 
         return obsluha
 
     # Probuzení se řeší až za kontrolou stavu: otáčení má při čtení mlčet,
     # ale ze spánku musí rozsvítit i ono.
-    kolecko.when_rotated_clockwise = probouzeci(ctecka, hlidac, jen_v_menu(ctecka.dalsi))
+    kolecko.when_rotated_clockwise = probouzeci(ctecka, hlidac, jen_po_oledu(ctecka.dalsi))
     kolecko.when_rotated_counter_clockwise = probouzeci(
-        ctecka, hlidac, jen_v_menu(ctecka.predchozi)
+        ctecka, hlidac, jen_po_oledu(ctecka.predchozi)
     )
 
     # Krátký stisk se vyhodnotí až při uvolnění a jen tehdy, když mezitím
@@ -442,13 +446,23 @@ def pripoj_enkoder(ctecka, hlidac=None):
     def na_drzeni():
         nonlocal drzeno
         drzeno = True
-        if not probouzi:
+        if probouzi:
+            return
+        # Podle stavu má dlouhý stisk tři různé významy, a rozhodnout se musí
+        # tady: zpet_do_cteni() by z rychlého listování udělala potvrzení,
+        # což je opak toho, co držení znamená (útěk, ne potvrzení).
+        stav = ctecka.snimek().stav
+        if stav is Stav.CTENI:
+            ctecka.zacni_rychle_listovani()
+        elif stav is Stav.RYCHLE_LISTOVANI:
+            ctecka.zrus_rychle_listovani()
+        else:
             ctecka.zpet_do_cteni()
 
     def na_uvolneni():
         # Větvení podle stavu je uvnitř akce(): v menu potvrdí položku, při
-        # čtení otevře menu. Díky tomu jede simulátor na téže cestě, i když
-        # žádný kodér nemá.
+        # čtení otevře menu a při rychlém listování potvrdí vybranou stránku.
+        # Díky tomu jede simulátor na téže cestě, i když žádný kodér nemá.
         if not drzeno and not probouzi:
             ctecka.akce()
 
@@ -499,7 +513,13 @@ def main():
 
     try:
         while not ctecka.konec:
-            v_menu = ctecka.snimek().stav is Stav.MENU
+            stav = ctecka.snimek().stav
+            v_menu = stav is Stav.MENU
+            # Rychlé listování je z pohledu smyčky totéž co menu: kreslí se jen
+            # po OLEDu a e-ink se nesmí dotknout, jinak by každé cvaknutí
+            # kodéru stálo ~29 s a celý režim by ztratil smysl. Tik je proto
+            # taky krátký — displej musí stíhat za rukou.
+            jen_oled = v_menu or stav is Stav.RYCHLE_LISTOVANI
 
             # Úsporu vyhodnocuje smyčka, ne callback: zhasnout a rozsvítit
             # znamená sáhnout na I2C, a to do cizího vlákna nepatří. Srovnává
@@ -507,7 +527,7 @@ def main():
             # probuzení, které přišlo uprostřed předchozího průchodu.
             faze = hlidac.faze()
             if faze is Uspora.VYPNUTI:
-                # Nejdřív se korektně ukončí smyčka; halt přijde až po úklidu
+                # Nejdřív se korektně ukončí smyčka; vypnutí přijde až po úklidu
                 # GPIO a I2C ve finally, ne odsud.
                 vypnout = True
                 ctecka.ukonci()
@@ -527,13 +547,17 @@ def main():
             # Vlajku shodí cekej_na_prekresleni() ještě před renderem. Stisk,
             # který přijde během zápisu na e-ink, ji tak nastaví znovu a smyčka
             # překreslí ještě jednou, místo aby se ztratil.
-            tik = TIK_SPANKU if spi else (TIK_MENU if v_menu else TIK_CTENI)
+            tik = TIK_SPANKU if spi else (TIK_MENU if jen_oled else TIK_CTENI)
             if ctecka.cekej_na_prekresleni(tik):
                 snimek = ctecka.snimek()
                 polozka_od = time.monotonic()  # nová položka se čte od začátku
 
-                if snimek.stav is Stav.MENU:
-                    # Menu jede jen po OLEDu. E-ink se schválně nechává být:
+                if snimek.stav is not Stav.CTENI:
+                    # Menu i rychlé listování jedou jen po OLEDu. Tady je to
+                    # jediné místo, kde se e-ink obchází, takže podmínka musí
+                    # být na "není CTENI", ne výčet stavů — nový stav, který by
+                    # se do výčtu zapomněl dopsat, by na panel začal psát.
+                    # E-ink se schválně nechává být:
                     # jeho refresh trvá ~10 s a při listování knihovnou by byl
                     # k ničemu. Drží dál poslední stránku, což je i to, co
                     # popisuje posledni_stav.json.
@@ -571,6 +595,8 @@ def main():
             # sedmkrát za sekundu a tolik výpisů adresáře je zbytečné.
             # Ve spánku se neskenuje: sahat na SD kartu dvakrát za sekundu po
             # dobu padesáti minut je pravý opak úspory a nikdo se stejně nedívá.
+            # Jen v menu: při rychlém listování je uživatel v knize a nové
+            # soubory ho nezajímají.
             ted = time.monotonic()
             if v_menu and not spi and ted - posledni_sken >= PERIODA_SKENU:
                 posledni_sken = ted
@@ -584,7 +610,7 @@ def main():
             ovladac.close()
         obrazovka.vypni()
 
-    # Až po úklidu: sudo halt sestřelí systém pod rukama, takže se GPIO a I2C
+    # Až po úklidu: poweroff sestřelí systém pod rukama, takže se GPIO a I2C
     # musí pustit dřív, ne až se to bude hodit.
     if vypnout:
         vypni_system()

@@ -63,15 +63,22 @@ stránky.
 
 ## Ovládání
 
-| Pin (BCM) | Tlačítko | V menu | Při čtení |
+| Pin (BCM) | Ovladač | V menu | Při čtení |
 |---|---|---|---|
-| 21 | Další | o knihu níž | další stránka |
-| 26 | Předchozí | o knihu výš | předchozí stránka |
-| 19 | Akce | otevřít knihu | zpět do menu |
+| 21 | Tlačítko Další | o knihu níž | další stránka |
+| 26 | Tlačítko Předchozí | o knihu výš | předchozí stránka |
+| 5, 6 | Otáčení kodéru | o knihu výš/níž | nic (stránky patří tlačítkům) |
+| 13 | Tlačítko v kodéru — krátce | otevřít knihu / vstoupit do složky | otevřít menu |
+| 13 | Tlačítko v kodéru — přes 1 s | zpět do rozečtené knihy | — |
 
-Krátký stisk se vyhodnocuje **až při uvolnění**. Držení pinu 19 přes 2 sekundy
-čtečku ukončí — a knihu už neotevře, takže vypínání nespustí stránkování.
-Zákmity ošetřuje gpiozero (`bounce_time=0.1`).
+Tlačítko v kodéru je **jediné potvrzovací tlačítko čtečky**; dřívější třetí
+tlačítko u e-inku (pin 19) už na desce není. Krátký stisk se vyhodnocuje **až
+při uvolnění**, aby držení nejdřív nepotvrdilo položku pod kurzorem. Zákmity
+ošetřuje gpiozero (`bounce_time=0.1`).
+
+Návrat do menu knihu **nezahazuje**, takže dlouhý stisk se do ní vrátí okamžitě
+a bez sáhnutí na e-ink — text na panelu je pořád ten správný a jeho překreslení
+by stálo ~29 s.
 
 Menu roluje po stránkách po 13 knihách. Pozice se ukládá do `progress.json`
 atomicky (dočasný soubor + `os.replace` + `fsync`), protože čtečka se vypíná
@@ -147,25 +154,30 @@ Nečinnost se měří od posledního sáhnutí na hardware a má dvě fáze:
 | Po | Co se stane |
 |---|---|
 | 10 minutách | Zhasne OLED. Program běží dál, e-ink se nedotkne. |
-| 60 minutách | Čtečka se korektně ukončí a vypne celé Pi (`sudo halt`). |
+| 60 minutách | Čtečka se korektně ukončí a vypne celé Pi (`sudo poweroff`). |
 
 Ze spánku **první stisk nebo otočení jen rozsvítí** a svou akci neprovede —
 jinak by sáhnutí na tmavou čtečku otočilo stránku a čekalo by se ~29 s na
 refresh e-inku. Druhý vstup už funguje normálně.
 
-Aby druhá fáze prošla, potřebuje `halt` běžet bez hesla. Bez tohohle pravidla
-se vypnutí jen zaloguje jako chyba a čtečka běží dál:
+Vypíná se přes `poweroff`, ne `halt`: `halt` systém jen zastaví a nechá ho pod
+proudem, kdežto `poweroff` projde vypínací sekvencí. Na Pi to sice napájení
+fyzicky nepřeruší (deska nemá čím), ale je to ta úspornější z obou možností.
+
+Aby druhá fáze prošla, potřebuje `poweroff` běžet bez hesla. Bez tohohle
+pravidla se vypnutí jen zaloguje jako chyba a čtečka běží dál:
 
 ```bash
-echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/halt, /sbin/halt" \
-  | sudo tee /etc/sudoers.d/ctecka-halt
-sudo chmod 440 /etc/sudoers.d/ctecka-halt
-sudo -n halt --help >/dev/null && echo "pravidlo platí"   # kontrola bez vypnutí
+echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/poweroff, /sbin/poweroff" \
+  | sudo tee /etc/sudoers.d/ctecka-poweroff
+sudo chmod 440 /etc/sudoers.d/ctecka-poweroff
+sudo -n poweroff --help >/dev/null && echo "pravidlo platí"  # kontrola bez vypnutí
 ```
 
 Obě cesty schválně: sudo hledá příkaz podle `secure_path`, kde je `/usr/sbin`
-před `/sbin`, takže `sudo halt` se ve skutečnosti rozhodne pro `/usr/sbin/halt`.
-Pravidlo jen na `/sbin/halt` by se minulo a sudo by mlčky chtělo heslo.
+před `/sbin`, takže `sudo poweroff` se ve skutečnosti rozhodne pro
+`/usr/sbin/poweroff`. Pravidlo jen na `/sbin/poweroff` by se minulo a sudo by
+mlčky chtělo heslo.
 
 Prahy se dají přenastavit konstantami `DOBA_DO_SPANKU` a `DOBA_DO_VYPNUTI`
 v [`hlavni_ctecka.py`](hlavni_ctecka.py).

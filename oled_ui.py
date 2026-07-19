@@ -41,6 +41,13 @@ _MEZERA_TICKERU = 16  # prodleva mezi koncem a novým začátkem u dlouhého ná
 # 3 px na dně zbývají volné a nemůže se s ním potkat.
 VYSKA_UKAZATELE = 3
 
+# Rozvržení obrazovky rychlého listování. Tři pásma pod sebou na 32 px: horní
+# řádek s původní stránkou, tlustý pruh postupu, dolní řádek s pozicí.
+LIST_Y_HORNI = 0
+LIST_PRUH_OD = 10
+LIST_PRUH_DO = 21
+LIST_Y_DOLNI = 23
+
 # --- FONTY ---
 
 FONT_TEXT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -145,6 +152,8 @@ def vykresli_oled(snimek, fonty=None, faze=0):
         _radek(obraz, fonty, IKONA_CHYBA, snimek.chyba, "", faze)
     elif snimek.nacita_se:
         _radek(obraz, fonty, IKONA_NACITANI, "Načítám…", "", faze)
+    elif snimek.stav is Stav.RYCHLE_LISTOVANI:
+        _rychle_listovani(obraz, fonty, snimek)
     elif snimek.stav is Stav.CTENI:
         _radek(
             obraz,
@@ -217,6 +226,39 @@ def _menu(obraz, fonty, snimek, faze):
         pocitadlo = f"{index + 1 - posun}/{len(polozky) - posun}"
 
     _radek(obraz, fonty, _IKONY_POLOZEK.get(polozka.typ, IKONA_KNIHA), nazev, pocitadlo, faze)
+
+
+def _rychle_listovani(obraz, fonty, snimek):
+    """Obrazovka rychlého listování: odkud jsi vyšel, kde jsi, jak daleko.
+
+    Jiný layout než čtecí řádek schválně — uživatel má na první pohled poznat,
+    že e-ink teď nesleduje, co dělá kodér, a že se výběr teprve potvrzuje.
+    Ukazatel je tlustý pruh přes celou šířku, ne třípixelová čára na dně:
+    tady je poloha v knize hlavní informace, ne doplněk k textu.
+    """
+    kresli = ImageDraw.Draw(obraz)
+
+    _text_nahore(kresli, f"Původní: {snimek.puvodni_cislo_stranky}", fonty.drobne, OKRAJ, LIST_Y_HORNI)
+
+    dole = f"{snimek.cislo_stranky} / {snimek.pocet_stranek}"
+    x = max(OKRAJ, (SIRKA - _sirka(kresli, dole, fonty.drobne)) // 2)
+    _text_nahore(kresli, dole, fonty.drobne, x, LIST_Y_DOLNI)
+
+    kresli.rectangle((0, LIST_PRUH_OD, SIRKA - 1, LIST_PRUH_DO), outline=255)
+    if snimek.pocet_stranek > 0:
+        # Z čísla stránky (1..N), stejně jako u čtecího ukazatele — jinak by
+        # poslední stránka nikdy nevyplnila pruh celý.
+        podil = min(1.0, max(0.0, snimek.cislo_stranky / snimek.pocet_stranek))
+        # Vnitřek pruhu, aby výplň nesplynula s obrysem.
+        vnitrek = SIRKA - 2 * 2
+        sirka = max(1, round(vnitrek * podil))
+        kresli.rectangle((2, LIST_PRUH_OD + 2, 2 + sirka - 1, LIST_PRUH_DO - 2), fill=255)
+
+
+def _text_nahore(kresli, text, font, x, y):
+    """Text s horním okrajem na `y` — pro layout, kde se řádky skládají pod sebe."""
+    levy, horni, _, _ = kresli.textbbox((0, 0), text, font=font)
+    kresli.text((x - levy, y - horni), text, font=font, fill=255)
 
 
 def _ukazatel_postupu(obraz, podil):
