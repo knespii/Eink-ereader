@@ -36,15 +36,16 @@ import os
 VERZE_ALGORITMU = 2
 
 # Mezera mezi řádky nad rámec metrik fontu. Zůstává 5 px i po zmenšení písma
-# z 32 na 24, a to schválně:
+# z 32 přes 24 na 20, a to schválně:
 #
-#   - Řádek tím vyjde 34 px, tedy 1,42× velikost písma. To je uprostřed
-#     typografického rozmezí 1,4–1,5; dřívějších 43/32 = 1,34 bylo spíš těsné.
-#   - Menší písmo prodloužilo řádek z 31 na 41 znaků, a delší řádek potřebuje
+#   - Řádek tím vyjde 29 px, tedy 1,45× velikost písma — uprostřed
+#     typografického rozmezí 1,4–1,5. Původních 43/32 = 1,34 bylo spíš těsné,
+#     takže zmenšování písma proklad shodou okolností zlepšilo.
+#   - Menší písmo prodloužilo řádek z 31 na 49 znaků, a delší řádek potřebuje
 #     *víc* prokladu, ne míň — oko musí trefit začátek toho následujícího.
-#   - Zmenšit na 4 px by nepřineslo nic: 820 px pojme 24 řádků při rozestupu
-#     4 i 5 px. Až 3 px by přidala jeden řádek, ale za proklad 1,33 na
-#     jedenačtyřicetiznakovém řádku — nejhorší kombinace pro čtení.
+#   - Zmenšovat by se nevyplatilo: 4 px přidají jediný řádek z 28 na 29 a 3 px
+#     dva, obojí za proklad pod 1,4 na téměř padesátiznakovém řádku. To je
+#     špatný obchod — hustotu řeší velikost písma, ne slepování řádků.
 ROZESTUP_RADKU = 5
 
 

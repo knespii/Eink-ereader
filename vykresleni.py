@@ -30,15 +30,16 @@ LISTA_Y = VYSKA - 40  # 840 — vodorovná linka nad stavovou lištou
 TEXT_SIRKA = SIRKA - 2 * OKRAJ  # 488 — šířka, pro kterou se láme text
 TEXT_VYSKA = LISTA_Y - OKRAJ  # 820 — výška, do které se vejde text
 
-# Velikost písma knihy. Sníženo z 32 na 24, aby se na stránku vešlo víc textu:
-# 19 → 24 řádků a 31 → 41 znaků na řádek. Na reálné knize (Treason.epub) to dělá
-# 1465 → 934 stránek, tedy o 57 % víc textu na jedno otočení. Při ~29 s na
-# překreslení panelu je to hlavní páka, jak zkrátit čekání.
+# Velikost písma knihy. Sníženo z původních 32 přes 24 na 20, aby se na stránku
+# vešlo víc textu: 19 → 28 řádků a 31 → 49 znaků na řádek. Na reálné knize
+# (Treason.epub) to dělá 1465 → 709 stránek, tedy o 107 % víc textu na jedno
+# otočení. Při ~29 s na překreslení panelu je to hlavní páka, jak zkrátit čekání.
 #
-# 41 znaků na řádek je pořád pod doporučovaným rozmezím 45–75 pro souvislý text,
-# takže tudy vede cesta i dál; níž než ~20 px už ale DejaVu na e-inku ztrácí
-# kontrast tenkých tahů.
-VELIKOST_TEXTU = 24
+# 49 znaků na řádek je poprvé uvnitř doporučovaného rozmezí 45–75 pro souvislý
+# text, takže dál už zmenšovat není proč. Níž je to i technicky ošidné: tenké
+# tahy DejaVu pod ~20 px na e-inku ztrácejí kontrast, a to z PNG na monitoru
+# nepoznáš — musí se to zkusit na panelu.
+VELIKOST_TEXTU = 20
 
 _ZAHLAVI_Y = 75
 _MENU_Y0 = 110

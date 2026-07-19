@@ -124,15 +124,15 @@ ctecka/
 - Zmizelá složka shodí `_adresar` na kořen: prázdné menu bez cesty ven je horší než špatný výběr.
 
 ## `vykresleni.py` — kreslení
-- `nacti_fonty(cesta)` → `Fonty(text=VELIKOST_TEXTU, info=20, titulek=40)`; `VELIKOST_TEXTU = 24` (dřív 32).
+- `nacti_fonty(cesta)` → `Fonty(text=VELIKOST_TEXTU, info=20, titulek=40)`; `VELIKOST_TEXTU = 20` (dřív 32, pak 24).
 - `vykresli(snimek, fonty, nacti_obrazek=None)` → `(cerna, cervena)`, obě `PIL.Image` mode `"1"`, 528×880, **neotočené**.
 - Rozměry se **odvozují**: `TEXT_SIRKA = SIRKA - 2*OKRAJ = 488`, `TEXT_VYSKA = LISTA_Y - OKRAJ = 820`, `LISTA_Y = 840`.
-- Řádkování bere z `zpracovani_textu.vyska_radku(fonty.text)` — **jeden zdroj pravdy** s layoutem (34 px pro DejaVu 24, dřív 43 px pro 32). Hlídá to `test_pouziva_rozestup_z_layoutu`, které rozteč **měří z bitmapy** — proti konstantě by testovalo jen samo sebe.
+- Řádkování bere z `zpracovani_textu.vyska_radku(fonty.text)` — **jeden zdroj pravdy** s layoutem (29 px pro DejaVu 20; dřív 43 px pro 32 a 34 px pro 24). Hlídá to `test_pouziva_rozestup_z_layoutu`, které rozteč **měří z bitmapy** — proti konstantě by testovalo jen samo sebe.
 - Menu roluje **po stránkách** po `POLOZEK_NA_STRANKU = 13`; lišta hlásí `Knihy 14–26 z 30`.
 - **Stavová lišta je jen v menu.** Při čtení jde na panel čistý text knihy a **červená vrstva zůstává prázdná** — číslo stránky ukazuje OLED. Hlídá to `test_cervena_vrstva_zustane_prazdna`.
-- `TEXT_VYSKA` zůstalo 820 i po zrušení lišty. Uvolnilo se 20 px, ale při řádku 34 px se na 820 i 840 px vejde stejných **24 řádků** — rozšíření by tedy nepřidalo ani řádek a jen by si vyžádalo přestránkování všech knih. (Totéž platilo pro font 32: 43 px, 19 řádků.)
-- **Zmenšení písma na 24** dalo 19 → 24 řádků a 31 → 41 znaků na řádek; na `Treason.epub` 1465 → **934 stránek**, tedy o 57 % víc textu na jedno otočení panelu. `ROZESTUP_RADKU` **zůstal 5 px**: řádek tím vyjde na 1,42× velikost písma (typografické rozmezí je 1,4–1,5), kdežto dřívějších 1,34 bylo těsné. Zmenšit na 4 px nic nepřinese — 820 px pojme 24 řádků při 4 i 5 px. `VERZE_ALGORITMU` se zvyšovat nemusela: klíč cache už obsahuje velikost fontu i rozestup, takže se stránkování zneplatnilo samo (ověřeno).
-- Místo toho se blok textu **svisle vycentruje** (`_horni_okraj_textu()`): odsazení shora vyjde 34 px, naměřené okraje inkoustu 39 / 36 px. Počítá se z **plné** stránky, ne z počtu řádků na té aktuální — jinak by poloprázdná stránka kapitoly plavala uprostřed a text by mezi stránkami poskakoval. Stránkování se tím nemění, cache zůstává platná.
+- `TEXT_VYSKA` zůstalo 820 i po zrušení lišty. Uvolnilo se 20 px, ale při řádku 29 px se na 820 i 840 px vejde stejných **28 řádků** — rozšíření by tedy nepřidalo ani řádek a jen by si vyžádalo přestránkování všech knih. (Totéž platilo pro font 32: 43 px, 19 řádků.)
+- **Zmenšení písma na 20** dalo 19 → 28 řádků a 31 → 49 znaků na řádek; na `Treason.epub` 1465 → **709 stránek**, tedy o 107 % víc textu na jedno otočení panelu. 49 znaků je poprvé uvnitř doporučovaného rozmezí 45–75, takže dál zmenšovat není proč. `ROZESTUP_RADKU` **zůstal 5 px**: řádek tím vyjde na 1,45× velikost písma (typografické rozmezí je 1,4–1,5), kdežto dřívějších 1,34 bylo těsné — zmenšování písma proklad shodou okolností zlepšilo. Menší rozestup by přidal řádek nebo dva za proklad pod 1,4 na padesátiznakovém řádku. `VERZE_ALGORITMU` se zvyšovat nemusela: klíč cache už obsahuje velikost fontu i rozestup, takže se stránkování zneplatnilo samo (ověřeno).
+- Místo toho se blok textu **svisle vycentruje** (`_horni_okraj_textu()`): odsazení shora vyjde 36 px, naměřené okraje inkoustu 40 / 38 px. Počítá se z **plné** stránky, ne z počtu řádků na té aktuální — jinak by poloprázdná stránka kapitoly plavala uprostřed a text by mezi stránkami poskakoval. Stránkování se tím nemění, cache zůstává platná.
 - Obrázek se centruje na střed **celého panelu** (`VYSKA`), ne textové oblasti — při čtení už dole žádná lišta není.
 - Obrázky nenačítá sám — dostane `nacti_obrazek(cesta_v_archivu)`. Bez něj kreslí zástupku.
 

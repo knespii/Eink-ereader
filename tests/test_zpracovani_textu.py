@@ -21,7 +21,10 @@ class TestVyskaRadku:
         assert zpracovani_textu.vyska_radku(fonty.text) == ascent + descent + 5
 
     def test_jiny_font_jina_vyska(self, fonty):
-        maly = ImageFont.truetype(FONT_CESTA, 20)
+        """Velikost se odvozuje z produkční, ne zadrátovaně: pevná konstanta
+        se s ní jednou srazí (stalo se při zmenšení písma na 20) a test pak
+        padá na shodu, kterou vůbec nezkoumá."""
+        maly = ImageFont.truetype(FONT_CESTA, fonty.text.size // 2)
         assert zpracovani_textu.vyska_radku(maly) != zpracovani_textu.vyska_radku(fonty.text)
 
     def test_rozestup_lze_zmenit(self, fonty):
