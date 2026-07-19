@@ -346,6 +346,43 @@ class Ctecka:
         with self._zamek:
             self._zpet_do_menu()
 
+    def otevri_menu(self):
+        """Krátký stisk kodéru při čtení: menu nad rozečtenou knihou.
+
+        Na rozdíl od zpet_do_menu() se stránky ani pozice nezahazují. Kniha
+        zůstane v paměti, takže dlouhý stisk (zpet_do_cteni) se k ní vrátí
+        okamžitě a hlavně bez sáhnutí na e-ink — text na panelu je pořád ten
+        správný a jeho překreslení stojí ~29 s.
+
+        Cena je držená kniha v RAM po dobu procházení menu. Jakmile se otevře
+        jiná kniha, dodej_stranky() ji stejně přepíše.
+        """
+        with self._zamek:
+            if self._konec or self._stav is Stav.MENU:
+                return False
+            self._stav = Stav.MENU
+            self._zadej_prekresleni()
+            return True
+
+    def zpet_do_cteni(self):
+        """Dlouhý stisk kodéru: útěk z menu zpátky do knihy, ať jsi kdekoliv.
+
+        Vrací True, jen když je kam utéct. Bez rozečtené knihy (čerstvý start
+        do menu, nebo kniha zavřená přes zpet_do_menu()) se nestane nic —
+        vlajka překreslení se ani nenastaví, aby smyčka nesahala na e-ink.
+        """
+        with self._zamek:
+            if self._konec or not self._stranky:
+                return False
+            # Rozpracované načítání jiné knihy se ruší: jinak by za chvíli
+            # přebilo tu, ke které se uživatel právě vrátil.
+            self._pozadavek = None
+            self._nacitana = None
+            self._stav = Stav.CTENI
+            self._chyba = None
+            self._zadej_prekresleni()
+            return True
+
     def ukonci(self):
         """Dlouhý stisk: požadavek na ukončení programu."""
         with self._zamek:

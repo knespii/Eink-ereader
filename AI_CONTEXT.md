@@ -57,7 +57,7 @@ Základní pravidlo: **stav, kreslení a hardware o sobě navzájem nevědí.** 
 - **Koalescence zápisů:** rychlé listování se slije do **jednoho** zápisu `progress.json` (šetří SD kartu).
 - **Rotace patří driveru:** `vykresleni.py` kreslí 528×880 na výšku; otočení o 90° do 880×528 dělá `WaveshareDriver`, protože to je vlastnost železa, ne knihy.
 - **Dva displeje, jeden snímek:** `MENU` kreslí jen na OLED, `CTENI` jen na e-ink. Oba renderery čtou tentýž `Snimek`, takže se nemůžou rozejít. Návrat z knihy do menu **e-ink nepřekresluje** — panel drží poslední stránku a funguje jako přirozená záložka. `posledni_stav.json` se zapisuje jen při zápisu na panel, takže pořád popisuje to, co je na něm vidět.
-- **Kodér mlčí při čtení:** callbacky kodéru jsou obalené kontrolou stavu. Cvrnknutí do kodéru během čtení by jinak spustilo půlminutový refresh panelu.
+- **Otáčení kodéru mlčí při čtení:** callbacky rotace jsou obalené kontrolou stavu. Cvrnknutí do kodéru během čtení by jinak spustilo půlminutový refresh panelu. **Tlačítko v kodéru je naopak aktivní v obou stavech** — je to jediná cesta do menu (krátký stisk) a zpátky (dlouhý stisk).
 - **Lazy import ovladačů:** `waveshare_epd` se importuje až v konstruktoru `WaveshareDriver`, `luma.oled` až ve `vytvor_oled()` → zbytek jde spustit a testovat na desktopu. Chybějící železo se obejde atrapou, nesestřelí program.
 - **Hromadný SPI přenos:** viz [PERFORMANCE].
 
@@ -84,7 +84,7 @@ ctecka/
 ├── README.md                # dokumentace pro člověka
 ├── AI_CONTEXT.md            # tento soubor
 ├── fonts/                   # FontAwesome.ttf (4.7.0, OFL-1.1) + LICENSE-FontAwesome.txt
-├── tests/                   # 267 testů (pytest), bez hardwaru
+├── tests/                   # 274 testů (pytest), bez hardwaru
 │   ├── conftest.py          # autouse fixtury chránící progress.json a cache uživatele
 │   ├── test_stav.py, test_vykresleni.py, test_displej.py, test_knihovna.py
 │   ├── test_zpracovani_epub.py, test_zpracovani_textu.py
@@ -108,7 +108,8 @@ ctecka/
 - `Polozka` = frozen dataclass (`typ`, `nazev`, `cesta`). `POLOZKA_ZPET` je syntetické `".."` — na disku neexistuje, do pohledu se přidává jen mimo kořen a je vždy první.
 - `Snimek` = frozen dataclass: stav, **polozky** (obsah aktuálního adresáře včetně `..`), **adresar**, vyber, kniha (relativní cesta), **kniha_nazev** (jen jméno souboru, k zobrazení), stranka, cislo_stranky, pocet_stranek, nacita_se, chyba. Pole `seznam_knih` zůstalo jako n-tice názvů kvůli `vykresleni.py`.
 - `Ctecka(seznam_knih=None, prekreslit_na_startu=True)`.
-- **Pro tlačítka a kodér (z cizích vláken):** `dalsi()`, `predchozi()`, `akce()`, `zpet_do_menu()`, `ukonci()`.
+- **Pro tlačítka a kodér (z cizích vláken):** `dalsi()`, `predchozi()`, `akce()`, `zpet_do_menu()`, `otevri_menu()`, `zpet_do_cteni()`, `ukonci()`.
+- **Menu nad rozečtenou knihou:** `otevri_menu()` (krátký stisk kodéru při čtení) přepne do `MENU`, ale **stránky ani pozici nezahazuje** — na rozdíl od `zpet_do_menu()`. `zpet_do_cteni()` (dlouhý stisk) se pak vrátí okamžitě, bez nového stránkování a bez sáhnutí na e-ink. Bez rozečtené knihy vrátí `False` a **nevyžádá překreslení**, jinak by smyčka zbytečně budila panel. Cenou je kniha držená v RAM po dobu procházení menu.
 - **Pro hlavní smyčku:** `snimek()`, `cekej_na_prekresleni(timeout)`, `spotrebuj_prekresleni()`, `vyzvedni_pozadavek()`, `dodej_stranky(nazev, stranky, pocatecni_stranka)`, `vyzvedni_pozici_k_ulozeni()`, `nastav_seznam_knih(strom)`, vlastnost `konec`.
 - **Složky bez I/O:** `Ctecka` drží **celý strom** (`{"": [...], "slozka": [...]}`), který jí dodá hlavní smyčka. Vstup do složky je tak čistá práce s pamětí a jde vyřídit rovnou v obsluze kodéru. `nastav_seznam_knih()` bere i plochý seznam (kompatibilita) a drží výběr na téže položce podle `cesta`.
 - `akce()` se v menu větví podle `Typ`: `ZPET` → kořen (kurzor se postaví na opuštěnou složku), `SLOZKA` → vstup, `KNIHA` → požadavek pro hlavní smyčku.
@@ -176,7 +177,9 @@ ctecka/
 - Tlačítka u e-inku (BCM): `PIN_DALSI = 21`, `PIN_PREDCHOZI = 26`, `PIN_AKCE = 19`; `bounce_time = 0.1`, `hold_time = 2.0`.
 - Kodér u OLEDu (BCM): `PIN_ENKODER_CLK = 5`, `PIN_ENKODER_DT = 6`, `PIN_ENKODER_SW = 13`. OLED na I2C: BCM 2 (SDA) a 3 (SCL).
 - Krátký stisk visí na **`when_released`** (s vlajkou `drzeno`) — jinak by dlouhý stisk nejdřív otevřel knihu.
-- `pripoj_enkoder()` obaluje všechny tři callbacky kontrolou `Stav.MENU`. Chybějící kodér se odchytí a jen zaloguje — menu pak jede na tlačítkách.
+- **Tlačítko v kodéru obsluhuje celé menu samo** (`DOBA_DRZENI_ENKODER = 1.0`, kratší než 2 s u `PIN_AKCE`, protože se používá běžně): krátký stisk při čtení → `otevri_menu()`, krátký stisk v menu → `akce()`, dlouhý stisk kdekoliv → `zpet_do_cteni()`. Stejný vzor `when_released` + vlajka `drzeno` — jinak by držení nad knihou nejdřív spustilo stránkování. **Kontrolou `Stav.MENU` zůstává obalené jen otáčení**, tlačítko musí fungovat v obou stavech.
+- `VystupEink` porovnává `(kniha, cislo_stranky)` s tím, co panel drží, a shodný obsah nepošle — stejný vzor jako `VystupOled`, jen cena je ~29 s místo pár ms. Díky tomu je **útěk z menu do knihy zadarmo**: smyčka projde větví `CTENI`, ale na panel nesáhne a čtecí rozhraní se obnoví jen na OLEDu. Není to vlajka, kterou jde zapomenout nastavit, ale porovnání se skutečností. Výchozí otisk se bere z `posledni_stav.json` (`otisk_ulozeneho()`), jinak by první útěk po zapnutí překreslil panel týmž textem.
+- `pripoj_enkoder()` odchytí chybějící kodér a jen zaloguje — menu pak jede na tlačítkách.
 - `VystupOled` porovnává vykreslený obraz s posledním odeslaným a shodný na I2C neposílá. Bez toho by krátký název při 0,15s tiku znamenal 7 zápisů za sekundu pro nic. `hlaseni(text, podil)` tohle porovnání obchází — hláška se musí objevit vždy.
 - `hlas_nacitani(oled)` vrací callback pro `knihovna.obsluz()`, který během parsování překresluje ukazatel, ale nejvýš jednou za `PERIODA_HLASENI = 0.1` s. Parser hlásí tisíckrát za knihu; kreslit tolikrát by načítání znatelně prodloužilo.
 - Časování: `TIK_MENU = 0.08` (kvůli plynulému tickeru, ~12,5 snímku/s), `TIK_CTENI = 1.0`, `PERIODA_SKENU = 2.0`.
@@ -302,7 +305,7 @@ Naměřeno na Pi Zero W:
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest          # 267 passed, 2 skipped
+.venv/bin/python -m pytest          # 274 passed, 2 skipped
 ```
 
 - **Bez hardwaru:** gpiozero jede na `MockFactory`, takže jde otestovat i dvouvteřinové držení tlačítka nebo kvadraturní sekvenci kodéru.
@@ -354,7 +357,7 @@ Správa služby: `sudo systemctl status ctecka`, `journalctl -u ctecka -f`, `sud
 - **Dlouhá slova se nedělí** — slovo širší než řádek (např. URL) přeteče.
 - **Otočení stránky trvá ~29 s**, z toho ~25 s je přenos a budicí křivka panelu — strop daný hardwarem. Zbylé ~4 s jsou `epd.init()` a `epd.sleep()`. Viz [PERFORMANCE].
 - **Obnova po zapnutí předpokládá**, že panel drží poslední obraz. Kdyby se smazal, displej se srovná při prvním stisku.
-- **Vypnutí v menu probudí čtečku v knize** — `posledni_stav.json` popisuje e-ink, a ten drží poslední stránku. Návrat do menu je pak na tlačítku `PIN_AKCE`.
+- **Vypnutí v menu probudí čtečku v knize** — `posledni_stav.json` popisuje e-ink, a ten drží poslední stránku. Návrat do menu je pak na krátkém stisku kodéru (nebo na `PIN_AKCE`).
 - **Jen jedna úroveň složek.** Podsložka ve složce se ignoruje, knihy v ní jsou z menu nedostupné.
 - **Menu na e-inku už nikdo nekreslí**, ale `vykresleni.py` ho pořád umí a používá k tomu `Snimek.seznam_knih` (jen názvy, bez rozlišení složky). Používá ho simulátor.
 - **Simulátor nemá OLED** — kreslí pořád e-inkovou cestou, takže menu v prohlížeči vypadá jinak než na čtečce.

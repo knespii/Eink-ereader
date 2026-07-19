@@ -257,8 +257,9 @@ class TestEnkoderVMenu:
 
 
 class TestEnkoderPriCteni:
-    """Při čtení je kodér hluchý: stránky patří tlačítkům u e-inku a nechtěné
-    cvrnknutí by jinak spustilo desetisekundové překreslení panelu."""
+    """Otáčení je při čtení hluché: stránky patří tlačítkům u e-inku a nechtěné
+    cvrnknutí by jinak spustilo ~29s překreslení panelu. Tlačítko v kodéru
+    naopak funguje pořád — je to jediná cesta do menu a zpátky."""
 
     @pytest.fixture
     def ve_cteni(self, enkoder_a_ctecka):
@@ -278,10 +279,71 @@ class TestEnkoderPriCteni:
         assert c.snimek().cislo_stranky == 3
         assert c.spotrebuj_prekresleni() is False  # ani nevyžádalo překreslení
 
-    def test_stisk_nevrati_do_menu(self, ve_cteni, stisk):
+    def test_kratky_stisk_otevre_menu(self, ve_cteni, stisk):
         c, _ = ve_cteni
         stisk(h.PIN_ENKODER_SW)
+        assert c.snimek().stav is Stav.MENU
+
+    def test_kratky_stisk_nezahodi_knihu(self, ve_cteni, stisk):
+        """Menu se otevírá nad rozečtenou knihou — jinak by dlouhý stisk
+        neměl kam utéct a musel by knihu znovu stránkovat (~16 s)."""
+        c, _ = ve_cteni
+        stisk(h.PIN_ENKODER_SW)
+        assert c.zpet_do_cteni() is True
+        assert c.snimek().cislo_stranky == 3
+
+
+def drz(pin, cislo, doba=None):
+    """Dlouhý stisk: podrží pin přes hold_time a zase pustí."""
+    pin(cislo).drive_low()
+    time.sleep(h.DOBA_DRZENI_ENKODER + 0.4 if doba is None else doba)
+    pin(cislo).drive_high()
+    time.sleep(0.2)
+
+
+class TestDlouhyStiskEnkoderu:
+    """Globální escape: z libovolného místa v menu zpátky do knihy."""
+
+    @pytest.fixture
+    def s_knihou(self, enkoder_a_ctecka):
+        c, pin = enkoder_a_ctecka
+        c.dalsi()
+        c.akce()
+        c.vyzvedni_pozadavek()
+        c.dodej_stranky("Alliances.epub", STRANKY_ATRAPA, 2)
+        c.otevri_menu()
+        c.spotrebuj_prekresleni()
+        return c, pin
+
+    def test_vrati_do_cteni(self, s_knihou, pin):
+        c, _ = s_knihou
+        drz(pin, h.PIN_ENKODER_SW)
         assert c.snimek().stav is Stav.CTENI
+        assert c.snimek().cislo_stranky == 3
+
+    def test_utece_i_ze_zanorene_slozky(self, s_knihou, pin):
+        c, _ = s_knihou
+        c.predchozi()  # zpátky na složku scifi
+        c.akce()  # vstup dovnitř
+        assert c.snimek().adresar == "scifi"
+        drz(pin, h.PIN_ENKODER_SW)
+        assert c.snimek().stav is Stav.CTENI
+
+    def test_dlouhy_stisk_nepotvrdi_polozku(self, s_knihou, pin):
+        """Kdyby krátký stisk visel na when_pressed, držení nad složkou by
+        nejdřív vlezlo dovnitř a teprve pak uteklo."""
+        c, _ = s_knihou
+        drz(pin, h.PIN_ENKODER_SW)
+        assert c.snimek().adresar == ""
+        assert c.vyzvedni_pozadavek() is None
+
+    def test_bez_rozecetene_knihy_se_nic_nestane(self, enkoder_a_ctecka, pin):
+        """Není kam utéct — a hlavně se nesmí vyžádat překreslení, jinak by
+        smyčka sáhla na e-ink."""
+        c, _ = enkoder_a_ctecka
+        drz(pin, h.PIN_ENKODER_SW)
+        assert c.snimek().stav is Stav.MENU
+        assert c.spotrebuj_prekresleni() is False
 
 
 # --- VÝSTUP NA OLED ---
@@ -452,6 +514,42 @@ class TestRozvetveniVystupu:
         assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
         time.sleep(0.4)
         assert "eink" not in zaznam, "návrat do menu zbytečně překreslil panel"
+
+    def test_stisk_enkoderu_pri_cteni_otevre_menu_bez_einku(
+        self, bezici_smycka, pin, stisk
+    ):
+        ctecka, zaznam = bezici_smycka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        stisk(h.PIN_ENKODER_SW)
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "eink" in zaznam)
+
+        zaznam.clear()
+        stisk(h.PIN_ENKODER_SW)
+
+        assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
+        assert pockej(lambda: "oled" in zaznam)
+        assert "eink" not in zaznam
+
+    def test_utek_z_menu_prekresli_jen_oled(self, bezici_smycka, pin, stisk):
+        """Jádro dlouhého stisku: text na panelu je pořád ten správný, takže
+        se čtecí rozhraní obnoví jen na OLEDu a ušetří se ~29 s refreshe."""
+        ctecka, zaznam = bezici_smycka
+        krok_enkoderu(pin, h.PIN_ENKODER_CLK, h.PIN_ENKODER_DT)
+        stisk(h.PIN_ENKODER_SW)
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "eink" in zaznam)
+
+        stisk(h.PIN_ENKODER_SW)  # do menu
+        assert pockej(lambda: ctecka.snimek().stav is Stav.MENU)
+        zaznam.clear()
+
+        drz(pin, h.PIN_ENKODER_SW)  # dlouhý stisk = útěk zpět do knihy
+
+        assert pockej(lambda: ctecka.snimek().stav is Stav.CTENI)
+        assert pockej(lambda: "oled" in zaznam)
+        time.sleep(0.4)
+        assert "eink" not in zaznam, f"útěk do knihy sáhl na panel: {zaznam}"
 
 
 class TestHlaseniNacitani:

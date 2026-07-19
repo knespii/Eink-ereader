@@ -44,6 +44,11 @@ PIN_ENKODER_SW = 13
 DOBA_ZAKMITU = 0.1
 DOBA_DRZENI = 2.0
 
+# Držení tlačítka v kodéru, po kterém se bere jako dlouhý stisk (útěk do knihy).
+# Kratší než DOBA_DRZENI u e-inkového tlačítka schválně: tohle se používá běžně,
+# kdežto dvě sekundy u PIN_AKCE chrání před nechtěným vypnutím čtečky.
+DOBA_DRZENI_ENKODER = 1.0
+
 # Jak dlouho smyčka čeká na probuzení, když se nic neděje. V menu krátce, aby
 # se plynule posouval dlouhý název na OLEDu; při čtení nemá co animovat.
 # Čeká se na threading.Condition, ne přes time.sleep() — cvaknutí kodéru nebo
@@ -92,6 +97,54 @@ def zobraz(obrazovka, ctecka, fonty):
     # jen odsud, takže posledni_stav.json pořád popisuje obraz na e-inku —
     # menu na OLEDu do něj nezasahuje, protože OLED je po zapnutí stejně prázdný.
     knihovna.uloz_posledni_stav(snimek)
+
+
+class VystupEink:
+    """Zápis na e-ink s vynecháním překreslení na obsah, který na panelu už je.
+
+    Totéž, co dělá VystupOled s I2C, jen s jinou cenou: jedno překreslení stojí
+    ~29 s. Panel drží obraz i bez napájení, takže si stačí pamatovat, co na něm
+    je — dvojice (kniha, číslo stránky) obsah stránky určuje celou.
+
+    Kvůli tomu je návrat z menu do rozečtené knihy zadarmo: stav se přepne,
+    smyčka projde větví CTENI, ale zobraz() zjistí, že by psalo tentýž text,
+    a nesáhne na panel. Není to vlajka, kterou by šlo zapomenout nastavit —
+    je to porovnání s tím, co panel skutečně ukazuje.
+    """
+
+    def __init__(self, obrazovka, fonty, otisk=None):
+        self._obrazovka = obrazovka
+        self._fonty = fonty
+        self._posledni = otisk
+
+    def zobraz(self, ctecka):
+        snimek = ctecka.snimek()
+        otisk = (snimek.kniha, snimek.cislo_stranky)
+        if otisk == self._posledni:
+            return False
+        self._posledni = otisk
+        zobraz(self._obrazovka, ctecka, self._fonty)
+        return True
+
+    def vycisti(self):
+        # Po vybílení na panelu nic není, takže příští stránka musí projít.
+        self._posledni = None
+        self._obrazovka.vycisti()
+
+    def vypni(self):
+        self._obrazovka.vypni()
+
+
+def otisk_ulozeneho(stav):
+    """Co drží panel podle posledni_stav.json, ve tvaru pro VystupEink.
+
+    Bez tohohle by první útěk z menu po zapnutí čtečky překreslil panel tím
+    samým textem, který na něm je — 29 s za nic. `stranka` je v souboru index,
+    Snimek.cislo_stranky počítá od jedné.
+    """
+    if not stav or stav.get("typ") != "cteni":
+        return None
+    return (stav.get("kniha"), stav.get("stranka", 0) + 1)
 
 
 def hlas_nacitani(oled, perioda=PERIODA_HLASENI):
@@ -204,9 +257,14 @@ def pripoj_tlacitka(ctecka):
 def pripoj_enkoder(ctecka):
     """Naváže rotační kodér na stav. Vrácený seznam si volající musí podržet.
 
-    Kodér obsluhuje jen menu. Při čtení se otáčení i stisk ignorují: stránky
-    patří tlačítkům u e-inku a nechtěné cvrnknutí do kodéru by jinak spustilo
-    desetisekundové překreslení panelu.
+    Tlačítko v kodéru obsluhuje celé menu samo:
+
+        krátký stisk při čtení  → otevře menu (jen OLED, e-ink se nechává být)
+        krátký stisk v menu     → potvrdí položku pod kurzorem
+        dlouhý stisk kdekoliv   → útěk zpátky do knihy, taky jen po OLEDu
+
+    Otáčení naopak zůstává hluché při čtení: stránky patří tlačítkům u e-inku
+    a nechtěné cvrnknutí do kodéru by jinak spustilo ~29s překreslení panelu.
 
     Chybějící nebo špatně zapojený kodér čtečku nepoloží — menu se pak ovládá
     tlačítky jako dřív. Stejný přístup jako u displeje: nepřítomné železo se
@@ -214,7 +272,9 @@ def pripoj_enkoder(ctecka):
     """
     try:
         kolecko = RotaryEncoder(PIN_ENKODER_CLK, PIN_ENKODER_DT, max_steps=0)
-        tlacitko = Button(PIN_ENKODER_SW, bounce_time=DOBA_ZAKMITU)
+        tlacitko = Button(
+            PIN_ENKODER_SW, bounce_time=DOBA_ZAKMITU, hold_time=DOBA_DRZENI_ENKODER
+        )
     except Exception as e:
         logging.warning("Rotační kodér není dostupný (%s), pokračuji bez něj.", e)
         return []
@@ -228,7 +288,33 @@ def pripoj_enkoder(ctecka):
 
     kolecko.when_rotated_clockwise = jen_v_menu(ctecka.dalsi)
     kolecko.when_rotated_counter_clockwise = jen_v_menu(ctecka.predchozi)
-    tlacitko.when_pressed = jen_v_menu(ctecka.akce)
+
+    # Krátký stisk se vyhodnotí až při uvolnění a jen tehdy, když mezitím
+    # nepřišlo when_held. Kdyby visel na when_pressed, dlouhý stisk by nejdřív
+    # potvrdil položku pod kurzorem (stisk přijde okamžitě) a teprve pak utekl
+    # do knihy — držení nad knihou by pokaždé spustilo stránkování.
+    drzeno = False
+
+    def na_stisku():
+        nonlocal drzeno
+        drzeno = False
+
+    def na_drzeni():
+        nonlocal drzeno
+        drzeno = True
+        ctecka.zpet_do_cteni()
+
+    def na_uvolneni():
+        if drzeno:
+            return
+        if ctecka.snimek().stav is Stav.MENU:
+            ctecka.akce()
+        else:
+            ctecka.otevri_menu()
+
+    tlacitko.when_pressed = na_stisku
+    tlacitko.when_held = na_drzeni
+    tlacitko.when_released = na_uvolneni
 
     return [kolecko, tlacitko]
 
@@ -241,14 +327,15 @@ def main():
     # Obnova posledního stavu bez překreslení: po zapnutí panel drží obraz,
     # kde jsi skončil, a čtečka na něj naváže. Když nic uloženého není (první
     # spuštění), startuje se v menu s běžným překreslením.
-    obnovit = knihovna.nacti_posledni_stav() is not None
-    ctecka = Ctecka(knihovna.nacti_strom(), prekreslit_na_startu=not obnovit)
-    if obnovit and not knihovna.obnov_posledni_stav(ctecka, fonty):
+    ulozeny = knihovna.nacti_posledni_stav()
+    ctecka = Ctecka(knihovna.nacti_strom(), prekreslit_na_startu=ulozeny is None)
+    if ulozeny is not None and not knihovna.obnov_posledni_stav(ctecka, fonty):
         # Uložený stav neseděl (např. smazaná kniha) — panel drží něco jiného,
         # ať se překreslí, aby displej odpovídal skutečnosti.
         ctecka.vyzadej_prekresleni()
+        ulozeny = None
 
-    obrazovka = displej.vytvor_displej()
+    obrazovka = VystupEink(displej.vytvor_displej(), fonty, otisk_ulozeneho(ulozeny))
     oled = VystupOled(oled_ui.vytvor_oled(), oled_ui.nacti_fonty())
     ovladace = pripoj_tlacitka(ctecka) + pripoj_enkoder(ctecka)
 
@@ -291,8 +378,11 @@ def main():
                     # Při čtení se název neposouvá — smyčka se sem dostane
                     # jednou za otočení stránky, takže by to stejně jen cukalo.
                     oled.prekresli(snimek, 0)
-                    zobraz(obrazovka, ctecka, fonty)
-                    od_cisteni += 1
+                    # Útěk z menu zpátky do knihy sem taky spadne, ale panel
+                    # už ten text ukazuje, takže zobraz() nic nepošle a čtecí
+                    # rozhraní se obnoví jen na OLEDu.
+                    if obrazovka.zobraz(ctecka):
+                        od_cisteni += 1
             elif v_menu:
                 # Vypršel tik a nikdo nic nezmáčkl — jen se poposune dlouhý
                 # název. Když se celý vejde, prekresli() nepošle na I2C nic,
