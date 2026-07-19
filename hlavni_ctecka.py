@@ -446,18 +446,11 @@ def pripoj_enkoder(ctecka, hlidac=None):
     def na_drzeni():
         nonlocal drzeno
         drzeno = True
-        if probouzi:
-            return
-        # Podle stavu má dlouhý stisk tři různé významy, a rozhodnout se musí
-        # tady: zpet_do_cteni() by z rychlého listování udělala potvrzení,
-        # což je opak toho, co držení znamená (útěk, ne potvrzení).
-        stav = ctecka.snimek().stav
-        if stav is Stav.CTENI:
-            ctecka.zacni_rychle_listovani()
-        elif stav is Stav.RYCHLE_LISTOVANI:
-            ctecka.zrus_rychle_listovani()
-        else:
-            ctecka.zpet_do_cteni()
+        if not probouzi:
+            # Větvení podle stavu je uvnitř dlouhy_stisk(), stejně jako u
+            # akce() — jinak by ho simulátor musel opsat a rozešel by se
+            # s železem.
+            ctecka.dlouhy_stisk()
 
     def na_uvolneni():
         # Větvení podle stavu je uvnitř akce(): v menu potvrdí položku, při

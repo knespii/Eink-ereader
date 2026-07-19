@@ -9,6 +9,9 @@ Dřív si simulátor kreslil vlastním kódem do RGB, a tak se s produkcí roze�
 zobrazoval názvy knih s příponou, měl jinou cestu k fontu a neznal dlouhý
 stisk. Testoval tedy hlavně sám sebe.
 
+Simulátor nemá OLED, takže rychlé listování v prohlížeči nevykreslí — stav a
+přechody ale projdou touž cestou jako na železe.
+
 Prostřední tlačítko na stránce zastupuje jediné tlačítko čtečky, to v rotačním
 kodéru, včetně rozdílu mezi krátkým klikem a podržením. Otáčení kodéru vlastní
 tlačítko nemá — v menu dělá totéž co „nahoru/dolů".
@@ -45,7 +48,8 @@ def naveste_tlacitka(ctecka):
     o tom rozhoduje stav uvnitř Ctecky. Jsou to tytéž metody, které
     pripoj_tlacitka() a pripoj_enkoder() navěšují na piny, takže se web
     s železem nemůže rozejít: "akce" v menu potvrdí položku, při čtení otevře
-    menu, "dlouhy_stisk" se vrátí do rozečtené knihy.
+    menu, "dlouhy_stisk" při čtení zapne rychlé listování, při něm ho zruší
+    a v menu se vrátí do rozečtené knihy.
 
     Funkce, ne rovnou slovník: testy si přepínají na vlastní instanci Ctecky
     a bez tohohle by si mapování opisovaly a zapomněly na nově přidanou
@@ -55,7 +59,7 @@ def naveste_tlacitka(ctecka):
         "dalsi": ctecka.dalsi,
         "predchozi": ctecka.predchozi,
         "akce": ctecka.akce,
-        "dlouhy_stisk": ctecka.zpet_do_cteni,
+        "dlouhy_stisk": ctecka.dlouhy_stisk,
     }
 
 
@@ -117,7 +121,9 @@ SABLONA = Template(
         </div>
         <p class="napoveda">
             Prostřední tlačítko je jediné tlačítko čtečky: klik potvrdí položku
-            (při čtení otevře menu), podržení nad $drzeni&nbsp;s se vrátí do knihy.
+            (při čtení otevře menu, při rychlém listování potvrdí stránku),
+            podržení nad $drzeni&nbsp;s zapne rychlé listování, zruší ho, nebo
+            se z menu vrátí do knihy.
         </p>
 
         <script>

@@ -389,16 +389,27 @@ class Ctecka:
         vlajka překreslení se ani nenastaví, aby smyčka nesahala na e-ink.
         """
         with self._zamek:
-            if self._konec or not self._stranky:
-                return False
-            # Rozpracované načítání jiné knihy se ruší: jinak by za chvíli
-            # přebilo tu, ke které se uživatel právě vrátil.
-            self._pozadavek = None
-            self._nacitana = None
-            self._stav = Stav.CTENI
-            self._chyba = None
-            self._zadej_prekresleni()
-            return True
+            return self._zpet_do_cteni()
+
+    def dlouhy_stisk(self):
+        """Dlouhé držení tlačítka v kodéru — protějšek akce().
+
+        Význam se liší podle stavu, ale pořád je to totéž gesto „pryč odsud":
+
+            CTENI            → rychlé listování (skok knihou bez buzení e-inku)
+            RYCHLE_LISTOVANI → zrušení, zpátky na výchozí stránku
+            MENU             → útěk do rozečtené knihy
+
+        Větvení je schválně tady, ne v obsluze tlačítka: jinak by ho simulátor
+        musel opsat a rozešel by se s železem — přesně to se stalo, když
+        rychlé listování přibylo jen v hlavni_ctecka.py.
+        """
+        with self._zamek:
+            if self._stav is Stav.CTENI:
+                return self._zacni_rychle_listovani()
+            if self._stav is Stav.RYCHLE_LISTOVANI:
+                return self._zrus_rychle_listovani()
+            return self._zpet_do_cteni()
 
     def zacni_rychle_listovani(self):
         """Dlouhý stisk při čtení: listování po OLEDu, e-ink se nedotkne.
@@ -407,12 +418,7 @@ class Ctecka:
         Vrací True, jen když se stav opravdu přepnul.
         """
         with self._zamek:
-            if self._konec or self._stav is not Stav.CTENI or not self._stranky:
-                return False
-            self._puvodni_stranka = self._stranka
-            self._stav = Stav.RYCHLE_LISTOVANI
-            self._zadej_prekresleni()
-            return True
+            return self._zacni_rychle_listovani()
 
     def potvrd_rychle_listovani(self):
         """Krátký stisk: vybraná stránka platí, ať ji e-ink vykreslí.
@@ -430,12 +436,7 @@ class Ctecka:
         na panel (drží tentýž text), ale OLED se musí vrátit do čtecího režimu.
         """
         with self._zamek:
-            if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
-                return False
-            self._stranka = self._puvodni_stranka
-            self._stav = Stav.CTENI
-            self._zadej_prekresleni()
-            return True
+            return self._zrus_rychle_listovani()
 
     def ukonci(self):
         """Dlouhý stisk: požadavek na ukončení programu."""
@@ -517,6 +518,34 @@ class Ctecka:
                     if self._stav is Stav.CTENI:
                         self._pozice_k_ulozeni = (self._kniha, novy)
                     self._zadej_prekresleni()
+
+    def _zpet_do_cteni(self):
+        if self._konec or not self._stranky:
+            return False
+        # Rozpracované načítání jiné knihy se ruší: jinak by za chvíli
+        # přebilo tu, ke které se uživatel právě vrátil.
+        self._pozadavek = None
+        self._nacitana = None
+        self._stav = Stav.CTENI
+        self._chyba = None
+        self._zadej_prekresleni()
+        return True
+
+    def _zacni_rychle_listovani(self):
+        if self._konec or self._stav is not Stav.CTENI or not self._stranky:
+            return False
+        self._puvodni_stranka = self._stranka
+        self._stav = Stav.RYCHLE_LISTOVANI
+        self._zadej_prekresleni()
+        return True
+
+    def _zrus_rychle_listovani(self):
+        if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
+            return False
+        self._stranka = self._puvodni_stranka
+        self._stav = Stav.CTENI
+        self._zadej_prekresleni()
+        return True
 
     def _potvrd_rychle_listovani(self):
         if self._konec or self._stav is not Stav.RYCHLE_LISTOVANI:
