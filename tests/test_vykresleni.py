@@ -15,6 +15,25 @@ def _inkoust(bitmapa):
     return sum(n for n, v in bitmapa.getcolors() if v == 0)
 
 
+def _radku_na_strance(fonty):
+    """Kolik řádků se vejde na plnou stránku — týž výpočet jako ve stránkování."""
+    return vykresleni.TEXT_VYSKA // zpracovani_textu.vyska_radku(fonty.text)
+
+
+def _zacatky_radku(bitmapa):
+    """Horní hrana každého souvislého pásma inkoustu — tedy začátky řádků."""
+    pole = bitmapa.load()
+    ma_inkoust = [
+        any(pole[x, y] == 0 for x in range(bitmapa.width))
+        for y in range(bitmapa.height)
+    ]
+    return [
+        y
+        for y in range(bitmapa.height)
+        if ma_inkoust[y] and not (y > 0 and ma_inkoust[y - 1])
+    ]
+
+
 def _svisly_rozsah(bitmapa):
     """(nejvyšší, nejnižší) řádek s inkoustem. Bez inkoustu vrací (0, 0)."""
     pole = bitmapa.load()
@@ -225,7 +244,7 @@ class TestCteni:
             c.vyzvedni_pozadavek(),
             [
                 {"typ": "text", "obsah": [radek]},
-                {"typ": "text", "obsah": [radek] * 19},
+                {"typ": "text", "obsah": [radek] * _radku_na_strance(fonty)},
             ],
             0,
         )
@@ -236,7 +255,21 @@ class TestCteni:
         assert _svisly_rozsah(kratka)[0] == _svisly_rozsah(plna)[0]
 
     def test_pouziva_rozestup_z_layoutu(self, fonty):
-        assert zpracovani_textu.vyska_radku(fonty.text) == 43
+        """Rozteč nakreslených řádků se musí rovnat té, se kterou počítalo
+        stránkování. Měří se z bitmapy, ne proti zadrátovanému číslu — to by
+        se muselo přepisovat při každé změně velikosti fontu a testovalo by
+        konstantu místo vazby mezi layoutem a kreslením.
+        """
+        c = Ctecka(["a.epub"])
+        c.akce()
+        c.dodej_stranky(c.vyzvedni_pozadavek(), [{"typ": "text", "obsah": ["Ahoj"] * 3}], 0)
+        cerna, _ = vykresleni.vykresli(c.snimek(), fonty)
+
+        zacatky = _zacatky_radku(cerna)
+        assert len(zacatky) == 3, f"nenašel jsem tři řádky, ale {len(zacatky)}"
+        rozestup = zpracovani_textu.vyska_radku(fonty.text)
+        assert zacatky[1] - zacatky[0] == rozestup
+        assert zacatky[2] - zacatky[1] == rozestup
 
 
 class TestObrazkovaStranka:

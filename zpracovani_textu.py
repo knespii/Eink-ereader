@@ -35,6 +35,16 @@ import os
 #   2: zpracovani_epub přestal slévat slova přes hranice vnořených tagů
 VERZE_ALGORITMU = 2
 
+# Mezera mezi řádky nad rámec metrik fontu. Zůstává 5 px i po zmenšení písma
+# z 32 na 24, a to schválně:
+#
+#   - Řádek tím vyjde 34 px, tedy 1,42× velikost písma. To je uprostřed
+#     typografického rozmezí 1,4–1,5; dřívějších 43/32 = 1,34 bylo spíš těsné.
+#   - Menší písmo prodloužilo řádek z 31 na 41 znaků, a delší řádek potřebuje
+#     *víc* prokladu, ne míň — oko musí trefit začátek toho následujícího.
+#   - Zmenšit na 4 px by nepřineslo nic: 820 px pojme 24 řádků při rozestupu
+#     4 i 5 px. Až 3 px by přidala jeden řádek, ale za proklad 1,33 na
+#     jedenačtyřicetiznakovém řádku — nejhorší kombinace pro čtení.
 ROZESTUP_RADKU = 5
 
 
