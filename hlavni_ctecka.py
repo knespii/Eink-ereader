@@ -48,7 +48,10 @@ DOBA_DRZENI = 2.0
 # se plynule posouval dlouhý název na OLEDu; při čtení nemá co animovat.
 TIK_MENU = 0.15
 TIK_CTENI = 1.0
-KROK_TICKERU = 4  # o kolik pixelů posunout název na jeden tik
+# O kolik pixelů posunout název na jeden tik. Při TIK_MENU 0,15 s vychází
+# 6 px na 40 px/s. Zrychluje se krokem, ne kratším tikem: víc překreslení za
+# sekundu by znamenalo víc provozu na I2C a víc práce pro Pi Zero W úplně zbytečně.
+KROK_TICKERU = 6
 
 # Jak často se přehledává složka s knihami. Dřív se skenovalo při každém
 # průchodu, což při TIK_MENU 0,15 s znamená sedm výpisů adresáře za sekundu.
